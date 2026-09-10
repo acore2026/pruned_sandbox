@@ -1,0 +1,3 @@
+-r services/asr/requirements.txt
+-r services/intent/requirements.txt
+-r services/video/requirements.txt

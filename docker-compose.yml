@@ -1,0 +1,42 @@
+name: sandbox-lite
+
+services:
+  sandbox:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-devel-ubuntu24.04}
+      additional_contexts:
+        asr_model: ${ORIGINAL_MODEL_ROOT:-../sandbox-demo}/models/whisper-models/whisper-large-v3
+        intent_model: ${ORIGINAL_MODEL_ROOT:-../sandbox-demo}/models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct
+        yolo_models: ${ORIGINAL_MODEL_ROOT:-../sandbox-demo}/yolo/assets/models
+    image: ${IMAGE_NAME:-sandbox-lite:latest}
+    container_name: ${CONTAINER_NAME:-sandbox-lite}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      VIDEO_HOST: "0.0.0.0"
+      VIDEO_PORT: "28500"
+      VIDEO_PUBLIC_IP: ${VIDEO_PUBLIC_IP:-172.30.0.10}
+      CONFIGURE_N6_ROUTES: ${CONFIGURE_N6_ROUTES:-true}
+      UPF_N6_IP: ${UPF_N6_IP:-172.30.0.2}
+      UE_INTERNET_CIDR: ${UE_INTERNET_CIDR:-10.60.0.0/16}
+      UE_ACN_CIDR: ${UE_ACN_CIDR:-10.61.0.0/16}
+    cap_add:
+      - NET_ADMIN
+    networks:
+      n6:
+        ipv4_address: ${VIDEO_PUBLIC_IP:-172.30.0.10}
+    ports:
+      - "${ASR_PORT:-9004}:9004"
+      - "${INTENT_PORT:-8011}:8011"
+      - "${VIDEO_PORT:-28500}:28500"
+    gpus: all
+    init: true
+    restart: unless-stopped
+
+networks:
+  n6:
+    external: true
+    name: ${N6_NETWORK_NAME:-compose_n6}

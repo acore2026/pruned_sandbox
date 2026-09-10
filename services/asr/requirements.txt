@@ -1,0 +1,5 @@
+aiohttp==3.14.1
+faster-whisper==1.2.1
+nvidia-cublas-cu12>=12.9
+nvidia-cuda-runtime-cu12>=12.9
+nvidia-cudnn-cu12==9.23.1.3
