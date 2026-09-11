@@ -46,6 +46,8 @@ def _model_path() -> str:
 class VideoSettings:
     host: str
     port: int
+    management_host: str
+    management_port: int
     public_ip: str
     cors_origin: str
     yolo_enabled: bool
@@ -58,12 +60,16 @@ class VideoSettings:
     video_width: int
     video_height: int
     video_fps: float
+    h264_rtp_payload_bytes: int
     rtc_ice_servers: tuple[str, ...]
     rtc_ice_username: str
     rtc_ice_credential: str
     rtc_ice_gather_timeout_s: float
     source_wait_seconds: float
-    session_ttl_seconds: float
+    management_token: str
+    intent_url: str
+    producer_control_url: str
+    producer_control_timeout_s: float
 
     @classmethod
     def from_env(cls) -> "VideoSettings":
@@ -72,7 +78,9 @@ class VideoSettings:
                 "VIDEO_HOST",
                 os.getenv("MOCK_LISTEN_HOST", os.getenv("SANDBOX_HOST", "0.0.0.0")),
             ),
-            port=_int("VIDEO_PORT", _legacy_port()),
+            port=_int("SANDBOX_USER_PORT", _legacy_port()),
+            management_host=os.getenv("SANDBOX_MANAGEMENT_HOST", "0.0.0.0"),
+            management_port=_int("SANDBOX_MANAGEMENT_PORT", 28501),
             public_ip=os.getenv(
                 "VIDEO_PUBLIC_IP",
                 os.getenv("MOCK_VIDEO_SERVER_IP", "172.30.0.10"),
@@ -85,20 +93,33 @@ class VideoSettings:
             yolo_iou=_float("YOLO_IOU", 0.4),
             yolo_image_size=_int("YOLO_IMAGE_SIZE", 640),
             yolo_classes=_csv("YOLO_CLASSES"),
-            video_width=_int("VIDEO_WIDTH", 1280),
-            video_height=_int("VIDEO_HEIGHT", 720),
-            video_fps=_float("VIDEO_FPS", 15.0, minimum=1.0),
+            video_width=_int("VIDEO_WIDTH", 640, minimum=2),
+            video_height=_int("VIDEO_HEIGHT", 480, minimum=2),
+            video_fps=_float("VIDEO_FPS", 30.0, minimum=1.0),
+            h264_rtp_payload_bytes=_h264_rtp_payload_bytes(),
             rtc_ice_servers=_csv("WEBRTC_ICE_SERVERS"),
             rtc_ice_username=os.getenv("WEBRTC_ICE_USERNAME", "").strip(),
             rtc_ice_credential=os.getenv("WEBRTC_ICE_CREDENTIAL", "").strip(),
             rtc_ice_gather_timeout_s=_float("WEBRTC_ICE_GATHER_TIMEOUT_S", 8.0, minimum=0.1),
             source_wait_seconds=_float("VIDEO_SOURCE_WAIT_SECONDS", 12.0, minimum=0.1),
-            session_ttl_seconds=_float("VIDEO_SESSION_TTL_SECONDS", 7200.0, minimum=1.0),
+            management_token=os.getenv(
+                "FREE6GC_COMPUTING_SANDBOX_MANAGEMENT_TOKEN", ""
+            ).strip(),
+            intent_url=os.getenv(
+                "SANDBOX_INTENT_URL",
+                "http://127.0.0.1:8011/api/v1/intent",
+            ).strip(),
+            producer_control_url=os.getenv(
+                "SANDBOX_PRODUCER_CONTROL_URL", ""
+            ).strip(),
+            producer_control_timeout_s=_float(
+                "SANDBOX_PRODUCER_CONTROL_TIMEOUT_S", 15.0, minimum=0.1
+            ),
         )
 
 
 def _legacy_port() -> int:
-    for name in ("MOCK_VIDEO_PORT", "SANDBOX_PORT"):
+    for name in ("VIDEO_PORT", "MOCK_VIDEO_PORT", "SANDBOX_PORT"):
         raw = os.getenv(name)
         if raw is None:
             continue
@@ -106,4 +127,20 @@ def _legacy_port() -> int:
             return int(raw)
         except ValueError:
             continue
-    return 28500
+    return 28502
+
+
+def _h264_rtp_payload_bytes() -> int:
+    raw = os.getenv(
+        "VIDEO_H264_RTP_PAYLOAD_BYTES",
+        os.getenv("MOCK_VIDEO_H264_RTP_PAYLOAD_BYTES", "1150"),
+    )
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValueError("VIDEO_H264_RTP_PAYLOAD_BYTES must be an integer") from error
+    if not 1100 <= value <= 1150:
+        raise ValueError(
+            "VIDEO_H264_RTP_PAYLOAD_BYTES must be between 1100 and 1150"
+        )
+    return value

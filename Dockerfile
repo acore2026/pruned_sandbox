@@ -48,7 +48,7 @@ RUN pip install --no-cache-dir \
         --index-url "${TORCH_INDEX_URL}" \
     && pip install --no-cache-dir -r requirements.txt
 
-# 这三个命名构建上下文由 docker-compose.yml 指向 sandbox-demo 的原模型目录。
+# 这三个命名构建上下文由 docker-compose.yml 分别指向本地模型目录。
 # 模型直接进入镜像，不在构建或运行阶段联网下载。
 COPY --from=asr_model / /models/asr/whisper-large-v3/
 COPY --from=intent_model / /models/intent/Qwen2.5-0.5B-Instruct/
@@ -57,10 +57,7 @@ RUN test -s /models/asr/whisper-large-v3/model.bin \
     && test -s /models/asr/whisper-large-v3/config.json \
     && test -s /models/intent/Qwen2.5-0.5B-Instruct/model.safetensors \
     && test -s /models/intent/Qwen2.5-0.5B-Instruct/config.json \
-    && test -s /models/yolo/yolov8s-worldv2.pt \
-    && test -s /models/yolo/box0612.pt \
-    && test -s /models/yolo/toy.pt \
-    && test -s /models/yolo/bottles.pt
+    && test -s /models/yolo/yolov8s-worldv2.pt
 
 COPY services /app/services
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/sandbox.conf
@@ -70,11 +67,12 @@ RUN useradd --create-home --uid 10001 sandbox \
     && chown -R sandbox:sandbox /app /tmp/sandbox-asr /models \
     && chmod 0755 /app/deploy/entrypoint.sh
 
-EXPOSE 9004 8011 28500
+EXPOSE 9004 28501 28502
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
     CMD curl --noproxy '*' -fsS http://127.0.0.1:9004/health >/dev/null \
         && curl --noproxy '*' -fsS http://127.0.0.1:8011/health >/dev/null \
-        && curl --noproxy '*' -fsS http://127.0.0.1:28500/healthz >/dev/null \
+        && curl --noproxy '*' -fsS http://127.0.0.1:28501/healthz >/dev/null \
+        && curl --noproxy '*' -fsS http://127.0.0.1:28502/healthz >/dev/null \
         || exit 1
 
 ENTRYPOINT ["/app/deploy/entrypoint.sh"]

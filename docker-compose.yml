@@ -7,18 +7,26 @@ services:
       args:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-devel-ubuntu24.04}
       additional_contexts:
-        asr_model: ${ORIGINAL_MODEL_ROOT:-../sandbox-demo}/models/whisper-models/whisper-large-v3
-        intent_model: ${ORIGINAL_MODEL_ROOT:-../sandbox-demo}/models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct
-        yolo_models: ${ORIGINAL_MODEL_ROOT:-../sandbox-demo}/yolo/assets/models
+        asr_model: ${ASR_MODEL_SOURCE:-./models/whisper-models/whisper-large-v3}
+        intent_model: ${INTENT_MODEL_SOURCE:-./models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct}
+        yolo_models: ${YOLO_MODEL_SOURCE:-../compute/yolo/assets/models}
     image: ${IMAGE_NAME:-sandbox-lite:latest}
     container_name: ${CONTAINER_NAME:-sandbox-lite}
     env_file:
       - path: .env
         required: false
     environment:
+      ASR_HOST: "0.0.0.0"
+      INTENT_HOST: "127.0.0.1"
       VIDEO_HOST: "0.0.0.0"
-      VIDEO_PORT: "28500"
+      SANDBOX_USER_PORT: "28502"
+      SANDBOX_MANAGEMENT_HOST: "0.0.0.0"
+      SANDBOX_MANAGEMENT_PORT: "28501"
       VIDEO_PUBLIC_IP: ${VIDEO_PUBLIC_IP:-172.30.0.10}
+      VIDEO_WIDTH: ${VIDEO_WIDTH:-640}
+      VIDEO_HEIGHT: ${VIDEO_HEIGHT:-480}
+      VIDEO_FPS: ${VIDEO_FPS:-30}
+      VIDEO_H264_RTP_PAYLOAD_BYTES: ${VIDEO_H264_RTP_PAYLOAD_BYTES:-1150}
       CONFIGURE_N6_ROUTES: ${CONFIGURE_N6_ROUTES:-true}
       UPF_N6_IP: ${UPF_N6_IP:-172.30.0.2}
       UE_INTERNET_CIDR: ${UE_INTERNET_CIDR:-10.60.0.0/16}
@@ -30,8 +38,8 @@ services:
         ipv4_address: ${VIDEO_PUBLIC_IP:-172.30.0.10}
     ports:
       - "${ASR_PORT:-9004}:9004"
-      - "${INTENT_PORT:-8011}:8011"
-      - "${VIDEO_PORT:-28500}:28500"
+      - "${SANDBOX_MANAGEMENT_PORT:-28501}:28501"
+      - "${SANDBOX_USER_PORT:-28502}:28502"
     gpus: all
     init: true
     restart: unless-stopped

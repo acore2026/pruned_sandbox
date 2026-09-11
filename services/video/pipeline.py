@@ -24,6 +24,11 @@ class FramePipeline:
     def __init__(self, settings: VideoSettings, detector: YoloDetector) -> None:
         self.settings = settings
         self.detector = detector
+        self._recognition_classes: tuple[str, ...] | None = None
+        self._search_classes: set[str] = set()
+        self._detections_changed = asyncio.Condition()
+        self._detection_revision = 0
+        self._last_detections: list[dict[str, Any]] = []
         self._latest_image = self._placeholder("Waiting for WebRTC source")
         self._source_task: asyncio.Task[None] | None = None
         self._source_track: MediaStreamTrack | None = None
@@ -63,6 +68,10 @@ class FramePipeline:
     async def close(self) -> None:
         await self.clear_source()
 
+    @property
+    def source_frame_available(self) -> bool:
+        return self.processed_frame.is_set()
+
     async def _cancel_source_task(self) -> None:
         task = self._source_task
         self._source_task = None
@@ -95,6 +104,8 @@ class FramePipeline:
             if self._source_id == source_id:
                 self._source_track = None
                 self._source_id = None
+                self.first_frame.clear()
+                self.processed_frame.clear()
                 self._latest_image = self._placeholder("WebRTC source disconnected")
 
     async def _read_frames(
@@ -120,20 +131,73 @@ class FramePipeline:
         while True:
             image = await queue.get()
             try:
-                annotated, _detections = await asyncio.to_thread(self.detector.process, image)
+                annotated, detections = await asyncio.to_thread(
+                    self.detector.process,
+                    image,
+                    self._active_classes(),
+                )
             except Exception as exc:
                 self.last_error = str(exc)
                 annotated = image
+                detections = []
                 LOGGER.exception("YOLO 推理失败，当前帧按原图输出")
             if self._source_id != source_id:
                 return
-            self._latest_image = annotated
+            self._latest_image = self._fit_output(annotated)
             self.processed_frames += 1
             self.last_frame_at_ms = int(time.time() * 1000)
             self.processed_frame.set()
+            async with self._detections_changed:
+                self._last_detections = detections
+                self._detection_revision += 1
+                self._detections_changed.notify_all()
 
     def latest_image(self) -> np.ndarray:
         return self._latest_image
+
+    def set_recognition_target(self, prompt: str | None) -> None:
+        normalized = str(prompt or "").strip()
+        self._recognition_classes = (normalized,) if normalized else None
+
+    def _active_classes(self) -> tuple[str, ...] | None:
+        values = list(self._recognition_classes or ())
+        values.extend(sorted(self._search_classes))
+        return tuple(dict.fromkeys(values)) or None
+
+    async def search_object(
+        self, prompt: str, timeout_ms: int
+    ) -> list[dict[str, Any]]:
+        """Run a one-shot search without replacing the persistent target."""
+        normalized = prompt.strip()
+        if not normalized:
+            return []
+        deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+        self._search_classes.add(normalized)
+        observed_revision = self._detection_revision
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return []
+                async with self._detections_changed:
+                    await asyncio.wait_for(
+                        self._detections_changed.wait_for(
+                            lambda: self._detection_revision > observed_revision
+                        ),
+                        timeout=remaining,
+                    )
+                    observed_revision = self._detection_revision
+                    matches = [
+                        dict(item)
+                        for item in self._last_detections
+                        if _labels_match(normalized, str(item.get("label", "")))
+                    ]
+                if matches:
+                    return matches
+        except asyncio.TimeoutError:
+            return []
+        finally:
+            self._search_classes.discard(normalized)
 
     def new_output_track(self) -> "OutputVideoTrack":
         return OutputVideoTrack(self, self.settings.video_fps)
@@ -163,6 +227,31 @@ class FramePipeline:
             cv2.LINE_AA,
         )
         return canvas
+
+    def _fit_output(self, image: np.ndarray) -> np.ndarray:
+        """Letterbox every processed frame to a stable WebRTC output size."""
+        target_width = self.settings.video_width
+        target_height = self.settings.video_height
+        height, width = image.shape[:2]
+        scale = min(target_width / width, target_height / height)
+        resized_width = max(2, int(width * scale) // 2 * 2)
+        resized_height = max(2, int(height * scale) // 2 * 2)
+        resized = cv2.resize(
+            image,
+            (resized_width, resized_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        output = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        left = (target_width - resized_width) // 2
+        top = (target_height - resized_height) // 2
+        output[top : top + resized_height, left : left + resized_width] = resized
+        return output
+
+
+def _labels_match(prompt: str, label: str) -> bool:
+    wanted = prompt.casefold().strip()
+    actual = label.casefold().strip()
+    return bool(actual) and (actual == wanted or actual in wanted or wanted in actual)
 
 
 class OutputVideoTrack(MediaStreamTrack):

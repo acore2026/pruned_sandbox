@@ -24,7 +24,7 @@ class IntentSettings:
     @classmethod
     def from_env(cls) -> "IntentSettings":
         return cls(
-            host=os.getenv("INTENT_HOST", os.getenv("SEMANTIC_ROUTE_HOST", "0.0.0.0")),
+            host=os.getenv("INTENT_HOST", os.getenv("SEMANTIC_ROUTE_HOST", "127.0.0.1")),
             port=_int("INTENT_PORT", _legacy_port()),
             cors_origin=os.getenv("CORS_ORIGIN", "*"),
             backend=os.getenv("INTENT_BACKEND", "hybrid").strip().lower(),

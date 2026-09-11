@@ -11,7 +11,7 @@ from services.asr.main import create_app as create_asr_app
 from services.intent.config import IntentSettings
 from services.intent.main import create_app as create_intent_app
 from services.video.config import VideoSettings
-from services.video.main import create_app as create_video_app
+from services.sandbox.main import create_app as create_sandbox_app
 
 
 class SeparateServiceApiTest(IsolatedAsyncioTestCase):
@@ -31,20 +31,20 @@ class SeparateServiceApiTest(IsolatedAsyncioTestCase):
             video_settings = VideoSettings.from_env()
         self.asr = TestClient(TestServer(create_asr_app(asr_settings)))
         self.intent = TestClient(TestServer(create_intent_app(intent_settings)))
-        self.video = TestClient(TestServer(create_video_app(video_settings)))
+        self.sandbox = TestClient(TestServer(create_sandbox_app(video_settings)))
         await self.asr.start_server()
         await self.intent.start_server()
-        await self.video.start_server()
+        await self.sandbox.start_server()
 
     async def asyncTearDown(self) -> None:
         await self.asr.close()
         await self.intent.close()
-        await self.video.close()
+        await self.sandbox.close()
 
     async def test_each_process_has_own_health_endpoint(self) -> None:
         asr_response = await self.asr.get("/health")
         intent_response = await self.intent.get("/health")
-        video_response = await self.video.get("/health")
+        video_response = await self.sandbox.get("/health")
 
         self.assertEqual("asr", (await asr_response.json())["service"])
         self.assertEqual("intent", (await intent_response.json())["service"])
@@ -63,7 +63,7 @@ class SeparateServiceApiTest(IsolatedAsyncioTestCase):
 
     async def test_intent_route_does_not_exist_on_other_services(self) -> None:
         asr_response = await self.asr.post("/api/v1/intent", json={"text": "向前走"})
-        video_response = await self.video.post("/api/v1/intent", json={"text": "向前走"})
+        video_response = await self.sandbox.post("/api/v1/intent", json={"text": "向前走"})
 
         self.assertEqual(404, asr_response.status)
         self.assertEqual(404, video_response.status)

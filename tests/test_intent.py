@@ -20,7 +20,20 @@ class RuleIntentClassifierTest(TestCase):
         result = self.classifier.classify("please turn left")
 
         self.assertEqual("movement", result.intent)
-        self.assertEqual("turn_left", result.argument)
+        self.assertEqual("left", result.argument)
+
+    def test_classifies_campus_patrol_direction_variants(self) -> None:
+        expected = {
+            "向前": "forward",
+            "退后": "backward",
+            "向左": "left",
+            "向右": "right",
+        }
+        for command, direction in expected.items():
+            with self.subTest(command=command):
+                result = self.classifier.classify(command)
+                self.assertEqual("movement", result.intent)
+                self.assertEqual(direction, result.argument)
 
     def test_classifies_grab_without_target(self) -> None:
         result = self.classifier.classify("请抓取")

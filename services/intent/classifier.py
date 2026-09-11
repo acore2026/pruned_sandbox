@@ -13,24 +13,32 @@ from .config import IntentSettings
 
 VALID_INTENTS = {"find_object", "movement", "grab", "other"}
 MOVEMENT_COMMANDS = {
-    "向前走": "move_forward",
-    "请向前走": "move_forward",
-    "往前走": "move_forward",
-    "前进": "move_forward",
-    "move forward": "move_forward",
-    "forward": "move_forward",
-    "向后走": "move_back",
-    "请向后走": "move_back",
-    "往后退": "move_back",
-    "后退": "move_back",
-    "move back": "move_back",
-    "back": "move_back",
-    "左转": "turn_left",
-    "向左转": "turn_left",
-    "turn left": "turn_left",
-    "右转": "turn_right",
-    "向右转": "turn_right",
-    "turn right": "turn_right",
+    "向前": "forward",
+    "向前走": "forward",
+    "请向前走": "forward",
+    "往前走": "forward",
+    "前进": "forward",
+    "move forward": "forward",
+    "forward": "forward",
+    "退后": "backward",
+    "向后": "backward",
+    "向后走": "backward",
+    "请向后走": "backward",
+    "往后退": "backward",
+    "后退": "backward",
+    "move back": "backward",
+    "back": "backward",
+    "backward": "backward",
+    "向左": "left",
+    "左转": "left",
+    "向左转": "left",
+    "turn left": "left",
+    "left": "left",
+    "向右": "right",
+    "右转": "right",
+    "向右转": "right",
+    "turn right": "right",
+    "right": "right",
     "挥手": "wave",
     "打招呼": "wave",
     "你好": "wave",
@@ -225,13 +233,16 @@ class QwenIntentClassifier:
     def classify(self, text: str) -> IntentResult:
         tokenizer, model = self._load()
         prompt = (
-            "Classify the robot command into find_object, movement, grab, or other. Return JSON only "
-            "with keys intent and argument. Movement argument must be move_forward, move_back, "
-            "turn_left, turn_right, or wave. Object arguments must be short English phrases. "
+            "This is a campus patrol scenario using smart glasses and a robot dog. Classify only "
+            "runtime robot commands into find_object, movement, grab, or other. Return JSON only "
+            "with keys intent and argument. Movement argument must be forward, backward, left, "
+            "right, or wave. Examples: 向前=forward, 退后=backward, 向左=left, 向右=right. "
+            "A request to start a campus patrol is a business-session request, not a runtime robot "
+            "command, and must be classified as other. Object arguments must be short English phrases. "
             f"Command: {json.dumps(text, ensure_ascii=False)}"
         )
         messages = [
-            {"role": "system", "content": "You are a strict robot intent classifier."},
+            {"role": "system", "content": "You are a strict campus patrol robot intent classifier."},
             {"role": "user", "content": prompt},
         ]
         rendered = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)

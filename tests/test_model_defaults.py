@@ -25,8 +25,8 @@ class OriginalModelDefaultsTest(TestCase):
         self.assertEqual(0.3, video.yolo_confidence)
         self.assertEqual(0.4, video.yolo_iou)
 
-    def test_legacy_yolo_model_name_resolves_inside_image(self) -> None:
-        with patch.dict(os.environ, {"YOLO_MODEL": "box0612"}, clear=True):
+    def test_custom_yolo_model_name_resolves_inside_image(self) -> None:
+        with patch.dict(os.environ, {"YOLO_MODEL": "custom-patrol"}, clear=True):
             settings = VideoSettings.from_env()
 
-        self.assertEqual("/models/yolo/box0612.pt", settings.yolo_model)
+        self.assertEqual("/models/yolo/custom-patrol.pt", settings.yolo_model)

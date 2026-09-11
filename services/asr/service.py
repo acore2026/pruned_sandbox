@@ -26,6 +26,7 @@ class SpeechRecognizer:
         self._semaphore = asyncio.Semaphore(settings.concurrency)
         self.loaded = False
         self.last_error: str | None = None
+        self.latest_transcript: dict[str, Any] | None = None
 
     def _load_model(self) -> Any:
         if self._model is not None:
@@ -120,7 +121,7 @@ class SpeechRecognizer:
         if not duration_s and segments:
             duration_s = max(item["endSec"] for item in segments)
         self.last_error = None
-        return {
+        result = {
             "transcriptId": uuid.uuid4().hex,
             "sessionId": session_id,
             "taskId": task_id,
@@ -135,15 +136,28 @@ class SpeechRecognizer:
             "segments": segments,
             "audioFilename": original_filename,
         }
+        self.latest_transcript = result
+        return result
 
     def health(self) -> dict[str, Any]:
+        ready = self.settings.enabled and self.last_error is None
+        if not self.settings.enabled:
+            status = "disabled"
+        elif self.last_error is not None:
+            status = "error"
+        else:
+            status = "ready"
         return {
-            "ok": self.settings.enabled,
+            "ok": ready,
+            "ready": ready,
+            "status": status,
             "service": "asr",
             "enabled": self.settings.enabled,
             "loaded": self.loaded,
             "model": self.settings.model,
+            "modelName": self.settings.model,
             "device": self.settings.device,
             "computeType": self.settings.compute_type,
             "lastError": self.last_error,
+            "latestTranscript": self.latest_transcript,
         }

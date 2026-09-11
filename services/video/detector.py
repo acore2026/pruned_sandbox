@@ -65,13 +65,24 @@ class YoloDetector:
                 self._try_set_dynamic_classes(normalized)
         return list(self._requested_classes)
 
-    def process(self, image: np.ndarray) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    def process(
+        self,
+        image: np.ndarray,
+        classes: list[str] | tuple[str, ...] | None = None,
+    ) -> tuple[np.ndarray, list[dict[str, Any]]]:
         if not self.settings.yolo_enabled:
             return image, []
         model = self._load_model()
         started = time.perf_counter()
         try:
             with self._inference_lock:
+                requested_classes = (
+                    list(classes) if classes is not None else list(self._requested_classes)
+                )
+                # YOLO-World stores its vocabulary on the model. Set it while
+                # holding the inference lock so concurrent bindings cannot see
+                # one another's recognition target.
+                self._try_set_dynamic_classes(requested_classes)
                 kwargs: dict[str, Any] = {
                     "source": image,
                     "conf": self.settings.yolo_confidence,
@@ -80,7 +91,7 @@ class YoloDetector:
                     "device": self.settings.yolo_device,
                     "verbose": False,
                 }
-                class_ids = self._resolve_class_ids(model)
+                class_ids = self._resolve_class_ids(model, requested_classes)
                 if class_ids is not None:
                     kwargs["classes"] = class_ids
                 result = model.predict(**kwargs)[0]
@@ -94,13 +105,17 @@ class YoloDetector:
             self.last_error = str(exc)
             raise
 
-    def _resolve_class_ids(self, model: Any) -> list[int] | None:
-        if not self._requested_classes or self._dynamic_classes:
+    def _resolve_class_ids(
+        self,
+        model: Any,
+        requested_classes: list[str],
+    ) -> list[int] | None:
+        if not requested_classes or self._dynamic_classes:
             return None
         names = getattr(model, "names", {})
         if isinstance(names, list):
             names = dict(enumerate(names))
-        wanted = {item.lower() for item in self._requested_classes}
+        wanted = {item.lower() for item in requested_classes}
         return [int(index) for index, name in names.items() if str(name).lower() in wanted]
 
     @staticmethod
