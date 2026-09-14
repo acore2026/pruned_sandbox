@@ -1084,6 +1084,7 @@ def _verify_retry(operation: StoredOperation, digest: str) -> None:
 
 def _binding_response(record: BindingRecord) -> dict[str, Any]:
     return {
+        "activation_idempotency_key": record.activation_key,
         "state": record.state,
         "binding_ref": record.binding_ref,
         "compute_service_session_id": record.session_id,

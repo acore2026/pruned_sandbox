@@ -85,7 +85,7 @@ class VideoSettings:
             management_port=_int("SANDBOX_MANAGEMENT_PORT", 28501),
             public_ip=os.getenv(
                 "VIDEO_PUBLIC_IP",
-                os.getenv("MOCK_VIDEO_SERVER_IP", "172.30.0.10"),
+                os.getenv("MOCK_VIDEO_SERVER_IP", "127.0.0.1"),
             ).strip(),
             cors_origin=os.getenv("CORS_ORIGIN", "*"),
             yolo_enabled=_bool("YOLO_ENABLED", True),

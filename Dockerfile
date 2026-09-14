@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 ARG BASE_IMAGE=nvidia/cuda:13.0.1-devel-ubuntu24.04
 FROM ${BASE_IMAGE}
 
@@ -5,11 +7,14 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG TORCH_VERSION=2.10.0
 ARG TORCHVISION_VERSION=0.25.0
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+ARG PYPI_MIRROR_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=10 \
     PATH=/opt/venv/bin:${PATH} \
     ASR_MODEL=/models/asr/whisper-large-v3 \
     ASR_DOWNLOAD_ROOT=/models/asr \
@@ -35,18 +40,20 @@ RUN apt-get update \
         python3.12-venv \
         supervisor \
     && rm -rf /var/lib/apt/lists/* \
-    && python3.12 -m venv /opt/venv \
-    && pip install --no-cache-dir --upgrade pip setuptools wheel
+    && python3.12 -m venv /opt/venv
 
 WORKDIR /app
 COPY requirements.txt ./
 COPY services/asr/requirements.txt /app/services/asr/requirements.txt
 COPY services/intent/requirements.txt /app/services/intent/requirements.txt
 COPY services/video/requirements.txt /app/services/video/requirements.txt
-RUN pip install --no-cache-dir \
-        "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
-        --index-url "${TORCH_INDEX_URL}" \
-    && pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install "cuda-bindings==13.0.3" --index-url "${PYPI_MIRROR_URL}" \
+    && pip install \
+        "torch==${TORCH_VERSION}+cu130" "torchvision==${TORCHVISION_VERSION}+cu130" \
+        --index-url "${PYPI_MIRROR_URL}" \
+        --extra-index-url "${TORCH_INDEX_URL}" \
+    && pip install -r requirements.txt --index-url "${PYPI_MIRROR_URL}"
 
 # 这三个命名构建上下文由 docker-compose.yml 分别指向本地模型目录。
 # 模型直接进入镜像，不在构建或运行阶段联网下载。

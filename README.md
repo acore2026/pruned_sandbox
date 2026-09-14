@@ -53,7 +53,7 @@ tail -f logs/asr.log logs/intent.log logs/sandbox.log
 
 可通过`LOG_DIR`、`LOG_MAX_BYTES`和`LOG_BACKUP_COUNT`调整保存目录、单文件大小与
 保留数量。容器启动时将宿主机`./logs`挂载到容器`/app/logs`，因此重启容器后日志
-仍会保留；`docker compose logs -f sandbox`仍可同时使用。
+仍会保留；`docker compose --env-file sandbox.env logs -f sandbox`仍可同时使用。
 
 Whisper采用首次请求时加载。发送真实音频即可同时完成模型加载和转写验证：
 
@@ -91,10 +91,10 @@ Whisper和Qwen，从旧`compute`工程读取唯一使用的通用YOLO权重：
 
 ```bash
 cd /home/aicore/pruned_sandbox
-cp .env.example .env
+cp sandbox.env.example sandbox.env
 ```
 
-模型位于其他目录时，在`.env`中分别配置其来源，例如：
+模型位于其他目录时，在`sandbox.env`中分别配置其来源，例如：
 
 ```dotenv
 ASR_MODEL_SOURCE=/data/models/whisper-large-v3
@@ -103,33 +103,34 @@ YOLO_MODEL_SOURCE=/data/models/yolo
 FREE6GC_COMPUTING_SANDBOX_MANAGEMENT_TOKEN=replace-with-management-token
 ```
 
-Sandbox默认加入Orange Core创建的外部N6网络`compose_n6`。先确认该网络存在，
-再检查权重、构建并启动容器：
+Sandbox作为当前GPU机器上的独立容器运行，使用宿主机网络并通过Tailscale与上下游
+通信，不依赖上游Docker网络。先取得本机Tailscale IPv4并写入`sandbox.env`中的
+`VIDEO_PUBLIC_IP`，再检查权重、构建并启动：
 
 ```bash
-docker network inspect compose_n6
+tailscale ip -4
 bash scripts/check_model_sources.sh
-docker compose build
-docker compose up -d
+docker compose --env-file sandbox.env build
+docker compose --env-file sandbox.env up -d
 ```
 
-如果`.env`修改了三个模型源变量，执行检查脚本时需将它们导出到当前Shell；
-`docker compose`会自动读取`.env`。可以执行：
+如果`sandbox.env`修改了三个模型源变量，执行检查脚本时需将它们导出到当前Shell；
+Docker Compose也通过`--env-file sandbox.env`读取同一文件。可以执行：
 
 ```bash
 set -a
-. ./.env
+. ./sandbox.env
 set +a
 bash scripts/check_model_sources.sh
-docker compose build
-docker compose up -d
+docker compose --env-file sandbox.env build
+docker compose --env-file sandbox.env up -d
 ```
 
 检查容器、三个进程和对外端口：
 
 ```bash
-docker compose ps
-docker compose logs --tail=100 sandbox
+docker compose --env-file sandbox.env ps
+docker compose --env-file sandbox.env logs --tail=100 sandbox
 docker exec sandbox-lite supervisorctl -c /etc/supervisor/conf.d/sandbox.conf status
 curl --noproxy '*' http://127.0.0.1:28501/healthz
 curl --noproxy '*' http://127.0.0.1:28502/healthz
@@ -145,11 +146,11 @@ docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
 停止并删除容器（模型仍保留在镜像和宿主机模型源目录中）：
 
 ```bash
-docker compose down
+docker compose --env-file sandbox.env down
 ```
 
-容器模式需要Docker Compose、NVIDIA Container Toolkit、可用NVIDIA GPU，以及
-预先创建的`compose_n6`网络。`box0612.pt`、`toy.pt`和`bottles.pt`不再使用，
+容器模式需要Docker Compose、NVIDIA Container Toolkit和可用NVIDIA GPU。
+`box0612.pt`、`toy.pt`和`bottles.pt`不再使用，
 不需要复制或下载。
 
 一个镜像、一个容器、四个职责目录和三个独立进程：
@@ -214,25 +215,22 @@ cause为`producer-control-endpoint-unconfigured`，不会伪装成已执行。
 - `Qwen2.5-0.5B-Instruct`
 - `yolov8s-worldv2.pt`
 
-默认模型源目录由`.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`
+默认模型源目录由`sandbox.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`
 和`YOLO_MODEL_SOURCE`配置。运行时无需模型挂载。
 
 ## 启动
 
-Sandbox服务默认接入 Orange Core 创建的外部 Docker 网络 `compose_n6`，
-用户面使用 `172.30.0.10:28502`，并添加经
-`172.30.0.2` 到 `10.60.0.0/16`、`10.61.0.0/16` 的路由。
-先启动 Orange Core 并确认网络存在：
+Sandbox容器独立运行在当前GPU机器并使用宿主机网络。将`sandbox.env`中的
+`VIDEO_PUBLIC_IP`配置为`tailscale ip -4`返回的本机地址，上下游使用同一地址访问
+`28501`、`28502`和`9004`：
 
 ```bash
-docker network inspect compose_n6
-cp .env.example .env
+cp sandbox.env.example sandbox.env
+# 编辑sandbox.env中的VIDEO_PUBLIC_IP
 bash scripts/check_model_sources.sh
-docker compose build
-docker compose up -d
+docker compose --env-file sandbox.env build
+docker compose --env-file sandbox.env up -d
 ```
-
-旧的 `mock-video-server` 需要停止，避免占用同一 N6 地址。
 
 检查Sandbox、ASR和三个进程：
 
@@ -396,13 +394,13 @@ session 时应返回指向上述媒体路径的 `producer` 和 `processed_stream
 ```json
 {
   "producer": {
-    "video_server_ip": "172.30.0.10",
-    "source_start_url": "http://172.30.0.10:28502/video/v1/sessions/{session_id}/source",
-    "source_stop_url": "http://172.30.0.10:28502/video/v1/sessions/{session_id}/source/stop"
+    "video_server_ip": "<sandbox-tailscale-ip>",
+    "source_start_url": "http://<sandbox-tailscale-ip>:28502/video/v1/sessions/{session_id}/source",
+    "source_stop_url": "http://<sandbox-tailscale-ip>:28502/video/v1/sessions/{session_id}/source/stop"
   },
   "processed_stream": {
-    "video_server_ip": "172.30.0.10",
-    "offer_url": "http://172.30.0.10:28502/video/v1/sessions/{session_id}/processed",
+    "video_server_ip": "<sandbox-tailscale-ip>",
+    "offer_url": "http://<sandbox-tailscale-ip>:28502/video/v1/sessions/{session_id}/processed",
     "protocol": "webrtc",
     "signaling": "non-trickle"
   }

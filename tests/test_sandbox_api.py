@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 
@@ -11,9 +12,11 @@ from services.video.rtc_server import ApiError
 from services.sandbox.api import SandboxApi, canonical_digest
 from services.sandbox.control import ActionOutcome
 from services.sandbox.main import (
+    RUNTIME_KEY,
     VideoRuntime,
     create_management_app,
     create_user_app,
+    management_health,
 )
 from services.video.config import VideoSettings
 
@@ -101,6 +104,21 @@ class SandboxPlaneIsolationTest(IsolatedAsyncioTestCase):
         )
         await runtime.close()
 
+    async def test_management_health_counts_only_active_bindings(self) -> None:
+        runtime = SimpleNamespace(
+            api=SimpleNamespace(
+                bindings={
+                    "active": SimpleNamespace(state="BOUND"),
+                    "history": SimpleNamespace(state="UNBOUND"),
+                }
+            )
+        )
+        request = SimpleNamespace(app={RUNTIME_KEY: runtime})
+        response = await management_health(request)
+        payload = json.loads(response.body)
+        self.assertEqual(1, payload["bindings"])
+        self.assertEqual(2, payload["binding_records"])
+
 
 class SandboxContractApiTest(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -167,7 +185,9 @@ class SandboxContractApiTest(IsolatedAsyncioTestCase):
     async def test_binding_media_recognition_control_and_unbind(self) -> None:
         response = await self.bind()
         self.assertEqual(200, response.status, await response.text())
-        self.assertEqual("BOUND", (await response.json())["state"])
+        binding = await response.json()
+        self.assertEqual("BOUND", binding["state"])
+        self.assertEqual("activate-1", binding["activation_idempotency_key"])
 
         response = await self.client.post(
             "/v1/media-connections",
@@ -274,7 +294,9 @@ class SandboxContractApiTest(IsolatedAsyncioTestCase):
             },
             headers={"Authorization": "Bearer secret"},
         )
-        self.assertEqual("UNBOUND", (await response.json())["state"])
+        unbound = await response.json()
+        self.assertEqual("UNBOUND", unbound["state"])
+        self.assertEqual("activate-1", unbound["activation_idempotency_key"])
 
     async def _wait_for_action(self, action_id: str) -> dict:
         for _ in range(20):

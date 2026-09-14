@@ -38,12 +38,11 @@ class ProcessLayoutTest(TestCase):
         self.assertNotIn("yolo11n", dockerfile)
         self.assertNotIn("ASR_MODEL_ID=small", dockerfile)
 
-    def test_container_publishes_asr_and_sandbox_ports(self) -> None:
+    def test_container_uses_host_network_for_standalone_deployment(self) -> None:
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-        self.assertIn('"${SANDBOX_MANAGEMENT_PORT:-28501}:28501"', compose)
-        self.assertIn('"${SANDBOX_USER_PORT:-28502}:28502"', compose)
-        self.assertIn('"${ASR_PORT:-9004}:9004"', compose)
-        self.assertNotIn(":8011\"", compose)
+        self.assertIn("network_mode: host", compose)
+        self.assertNotIn("compose_n6", compose)
+        self.assertNotIn("UPF_N6_IP", compose)
         self.assertIn("EXPOSE 9004 28501 28502", dockerfile)

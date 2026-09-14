@@ -22,7 +22,7 @@ class ServiceSettingsTest(TestCase):
         self.assertEqual(28501, video.management_port)
         self.assertEqual("0.0.0.0", asr.host)
         self.assertEqual("127.0.0.1", intent.host)
-        self.assertEqual("172.30.0.10", video.public_ip)
+        self.assertEqual("127.0.0.1", video.public_ip)
         self.assertEqual("/models/asr/whisper-large-v3", asr.model)
         self.assertEqual("hybrid", intent.backend)
         self.assertTrue(video.yolo_enabled)

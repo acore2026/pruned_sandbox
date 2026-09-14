@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import dataclass, replace
+import hashlib
+import json
 import logging
 import os
 import signal
+import time
 from typing import Any
 
 from aiohttp import web
@@ -64,7 +67,7 @@ def create_app(
     active_settings = settings or VideoSettings.from_env()
     active_runtime = runtime or VideoRuntime.build(active_settings)
     app = web.Application(
-        middlewares=[cors_middleware, error_middleware],
+        middlewares=[traffic_log_middleware, cors_middleware, error_middleware],
         client_max_size=max(2 * 1024 * 1024, active_settings.audio_max_upload_bytes + 1024 * 1024),
     )
     app[RUNTIME_KEY] = active_runtime
@@ -136,7 +139,7 @@ def create_user_app(runtime: VideoRuntime) -> web.Application:
 
 def _base_app(runtime: VideoRuntime) -> web.Application:
     app = web.Application(
-        middlewares=[cors_middleware, error_middleware],
+        middlewares=[traffic_log_middleware, cors_middleware, error_middleware],
         client_max_size=max(
             2 * 1024 * 1024,
             runtime.settings.audio_max_upload_bytes + 1024 * 1024,
@@ -148,11 +151,16 @@ def _base_app(runtime: VideoRuntime) -> web.Application:
 
 async def management_health(request: web.Request) -> web.Response:
     runtime = request.app[RUNTIME_KEY]
+    binding_records = len(runtime.api.bindings)
+    active_bindings = sum(
+        record.state != "UNBOUND" for record in runtime.api.bindings.values()
+    )
     return web.json_response(
         {
             "ok": True,
             "service": "sandbox-management",
-            "bindings": len(runtime.api.bindings),
+            "bindings": active_bindings,
+            "binding_records": binding_records,
         }
     )
 
@@ -190,6 +198,83 @@ async def set_detection_classes(request: web.Request) -> web.Response:
         raise ApiError(400, "INVALID_CLASSES", "classes must be a string array")
     normalized = request.app[RUNTIME_KEY].detector.set_classes(classes)
     return web.json_response({"classes": normalized})
+
+
+@web.middleware
+async def traffic_log_middleware(
+    request: web.Request,
+    handler: Any,
+) -> web.StreamResponse:
+    """Log API payloads without persisting credentials or large media bodies."""
+    if request.path in {"/healthz", "/health", "/api/health"}:
+        return await handler(request)
+
+    started = time.monotonic()
+    request_body = await _logged_request_body(request)
+    response = await handler(request)
+    elapsed_ms = round((time.monotonic() - started) * 1000, 2)
+    LOGGER.info(
+        "api_exchange remote=%s method=%s path=%s status=%s duration_ms=%s "
+        "request_id=%s request=%s response=%s",
+        request.remote or "-",
+        request.method,
+        request.path_qs,
+        response.status,
+        elapsed_ms,
+        request.headers.get("X-Request-ID", "-"),
+        _compact_json(request_body),
+        _compact_json(_logged_response_body(response)),
+    )
+    return response
+
+
+async def _logged_request_body(request: web.Request) -> Any:
+    content_type = request.content_type.lower()
+    if content_type.startswith("multipart/") or content_type.startswith("audio/"):
+        return {"body": "<binary omitted>", "content_length": request.content_length}
+    if content_type != "application/json" and not content_type.endswith("+json"):
+        return {"body": "<not JSON>", "content_length": request.content_length}
+    raw = await request.read()
+    if not raw:
+        return None
+    try:
+        return _sanitize_log_value(json.loads(raw))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"body": "<invalid JSON>", "bytes": len(raw)}
+
+
+def _logged_response_body(response: web.StreamResponse) -> Any:
+    if not isinstance(response, web.Response) or response.body is None:
+        return {"body": "<streamed or empty>"}
+    if response.content_type != "application/json":
+        return {"body": "<non-JSON>", "bytes": len(response.body)}
+    try:
+        return _sanitize_log_value(json.loads(response.body))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {"body": "<invalid JSON response>", "bytes": len(response.body)}
+
+
+def _sanitize_log_value(value: Any, key: str = "") -> Any:
+    lowered = key.lower()
+    if any(marker in lowered for marker in ("authorization", "token", "password", "secret")):
+        return "<redacted>"
+    if lowered == "sdp" and isinstance(value, str):
+        return {
+            "omitted": "sdp",
+            "bytes": len(value.encode("utf-8")),
+            "sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+        }
+    if isinstance(value, dict):
+        return {str(item_key): _sanitize_log_value(item, str(item_key)) for item_key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_log_value(item, key) for item in value]
+    if isinstance(value, str) and len(value) > 1000:
+        return {"omitted": "long string", "characters": len(value)}
+    return value
+
+
+def _compact_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 @web.middleware
