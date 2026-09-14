@@ -9,6 +9,8 @@ from typing import Any
 
 from aiohttp import web
 
+from services.logging_config import configure_logging
+
 from .config import AsrSettings
 from .service import SpeechRecognizer
 
@@ -139,10 +141,7 @@ def _optional(value: str | None) -> str | None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging("asr")
     defaults = AsrSettings.from_env()
     parser = argparse.ArgumentParser(description="Sandbox ASR service")
     parser.add_argument("--host", default=defaults.host)

@@ -7,6 +7,8 @@ from typing import Any
 
 from aiohttp import web
 
+from services.logging_config import configure_logging
+
 from .classifier import IntentService
 from .config import IntentSettings
 
@@ -83,10 +85,7 @@ async def cors_middleware(request: web.Request, handler: Any) -> web.StreamRespo
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging("intent")
     defaults = IntentSettings.from_env()
     parser = argparse.ArgumentParser(description="Sandbox intent service")
     parser.add_argument("--host", default=defaults.host)

@@ -36,8 +36,14 @@ else
     : "${INTENT_BACKEND:=rules}"
 fi
 : "${YOLO_ENABLED:=false}"
+: "${LOG_DIR:=$PROJECT_DIR/logs}"
+: "${LOG_MAX_BYTES:=10485760}"
+: "${LOG_BACKUP_COUNT:=5}"
 export SANDBOX_REAL_MODELS ASR_ENABLED ASR_MODEL ASR_DEVICE ASR_COMPUTE_TYPE
 export INTENT_BACKEND INTENT_MODEL YOLO_ENABLED
+export LOG_DIR LOG_MAX_BYTES LOG_BACKUP_COUNT
+
+mkdir -p "$LOG_DIR"
 
 cd "$PROJECT_DIR"
 child_pids=""
@@ -60,4 +66,5 @@ child_pids="$child_pids $!"
 echo "Sandbox management is starting at http://127.0.0.1:28501"
 echo "Sandbox user plane is starting at http://127.0.0.1:28502 (Ctrl-C to stop)."
 echo "ASR is starting at http://127.0.0.1:9004; Intent is internal at 127.0.0.1:8011."
+echo "Rolling logs are stored in $LOG_DIR (max $LOG_MAX_BYTES bytes, $LOG_BACKUP_COUNT backups per service)."
 wait

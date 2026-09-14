@@ -10,6 +10,8 @@ from typing import Any
 
 from aiohttp import web
 
+from services.logging_config import configure_logging
+
 from services.video.config import VideoSettings
 from services.video.detector import YoloDetector
 from services.video.rtc_server import ApiError, OrangeVideoServer
@@ -306,10 +308,7 @@ async def serve(settings: VideoSettings) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging("sandbox")
     defaults = VideoSettings.from_env()
     args = parse_args(defaults)
     settings = replace(

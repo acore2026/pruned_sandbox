@@ -36,6 +36,25 @@ curl --noproxy '*' http://127.0.0.1:9004/health
 curl --noproxy '*' http://127.0.0.1:8011/health
 ```
 
+本地启动会同时输出终端日志并保存滚动文件到`./logs/`：
+
+```text
+logs/asr.log
+logs/intent.log
+logs/sandbox.log
+```
+
+默认每个文件最多10 MiB并保留5个历史文件（`.1`～`.5`）。查看最近日志：
+
+```bash
+tail -n 200 logs/sandbox.log
+tail -f logs/asr.log logs/intent.log logs/sandbox.log
+```
+
+可通过`LOG_DIR`、`LOG_MAX_BYTES`和`LOG_BACKUP_COUNT`调整保存目录、单文件大小与
+保留数量。容器启动时将宿主机`./logs`挂载到容器`/app/logs`，因此重启容器后日志
+仍会保留；`docker compose logs -f sandbox`仍可同时使用。
+
 Whisper采用首次请求时加载。发送真实音频即可同时完成模型加载和转写验证：
 
 ```bash
