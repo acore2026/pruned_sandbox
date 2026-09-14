@@ -68,6 +68,8 @@ class VideoSettings:
     source_wait_seconds: float
     management_token: str
     intent_url: str
+    asr_url: str
+    audio_max_upload_bytes: int
     producer_control_url: str
     producer_control_timeout_s: float
 
@@ -109,6 +111,11 @@ class VideoSettings:
                 "SANDBOX_INTENT_URL",
                 "http://127.0.0.1:8011/api/v1/intent",
             ).strip(),
+            asr_url=os.getenv(
+                "SANDBOX_ASR_URL",
+                "http://127.0.0.1:9004/api/v1/transcribe",
+            ).strip(),
+            audio_max_upload_bytes=_int("ASR_MAX_UPLOAD_MB", 50) * 1024 * 1024,
             producer_control_url=os.getenv(
                 "SANDBOX_PRODUCER_CONTROL_URL", ""
             ).strip(),

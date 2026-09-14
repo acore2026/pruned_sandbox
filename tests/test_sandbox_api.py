@@ -95,6 +95,7 @@ class SandboxPlaneIsolationTest(IsolatedAsyncioTestCase):
         )
         self.assertNotIn("/v1/media-connections", management_paths)
         self.assertIn("/v1/media-connections", user_paths)
+        self.assertIn("/v1/audio-control-actions", user_paths)
         self.assertNotIn(
             "/management/v1/compute-session-bindings:bind", user_paths
         )

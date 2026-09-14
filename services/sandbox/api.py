@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from aiohttp import ClientSession, ClientTimeout, web
+from aiohttp import ClientSession, ClientTimeout, FormData, web
 
 from services.intent.classifier import RuleIntentClassifier
 
@@ -79,6 +80,7 @@ class ControlAction:
     digest: str
     result: dict[str, Any] | None = None
     cause: str = ""
+    transcription: dict[str, Any] | None = None
 
 
 class SandboxApi:
@@ -164,6 +166,10 @@ class SandboxApi:
                     self.get_recognition_target,
                 ),
                 web.post("/v1/control-actions", self.create_control_action),
+                web.post(
+                    "/v1/audio-control-actions",
+                    self.create_audio_control_action,
+                ),
                 web.get(
                     "/v1/control-actions/{action_id}",
                     self.get_control_action,
@@ -493,9 +499,105 @@ class SandboxApi:
 
     async def create_control_action(self, request: web.Request) -> web.Response:
         payload = await _json_object(request)
+        return await self._create_control_action(payload)
+
+    async def create_audio_control_action(self, request: web.Request) -> web.Response:
+        fields, audio, filename, content_type = await self._audio_upload(request)
+        request_id = fields.get("request_id", "").strip()
+        try:
+            context_value = json.loads(fields.get("computing_context", ""))
+        except (TypeError, ValueError) as exc:
+            raise ApiError(
+                400,
+                "invalid-request",
+                "computing_context must be a JSON object",
+            ) from exc
+        context = _context(context_value)
+        async with self.lock:
+            self._validate_context(context)
+        if context["role"] != "consumer":
+            raise ApiError(
+                409,
+                "binding-mismatch",
+                "audio control action must use the bound consumer context",
+            )
+        if not request_id:
+            raise ApiError(400, "invalid-request", "request_id is required")
+        if not self.media_engine.settings.asr_url:
+            raise ApiError(503, "asr-unavailable", "ASR endpoint is not configured")
+
+        if self.http is None:
+            self.http = ClientSession(timeout=ClientTimeout(total=120))
+        upload = FormData()
+        upload.add_field("session_id", context["compute_service_session_id"])
+        upload.add_field("task_id", request_id)
+        upload.add_field("source", "glasses-via-sandbox")
+        upload.add_field("language", fields.get("language", "zh"))
+        if fields.get("stop_reason"):
+            upload.add_field("stop_reason", fields["stop_reason"])
+        upload.add_field(
+            "file",
+            audio,
+            filename=filename,
+            content_type=content_type or "application/octet-stream",
+        )
+        try:
+            async with self.http.post(
+                self.media_engine.settings.asr_url,
+                data=upload,
+            ) as response:
+                asr_body = await response.json(content_type=None)
+                if response.status != 200:
+                    raise ApiError(502, "asr-failed", "ASR transcription failed")
+        except ApiError:
+            raise
+        except Exception as exc:
+            raise ApiError(503, "asr-unavailable", "ASR service is unavailable") from exc
+        transcript = asr_body.get("text") if isinstance(asr_body, dict) else None
+        if not isinstance(transcript, str) or not transcript.strip():
+            raise ApiError(422, "empty-transcription", "ASR returned no usable text")
+
+        payload = {
+            "request_id": request_id,
+            "computing_context": context,
+            "input": {
+                "type": "TEXT",
+                "text": transcript.strip(),
+                "language": fields.get("language", "zh"),
+            },
+        }
+        audio_digest = hashlib.sha256(audio).hexdigest()
+        operation_digest = canonical_digest(
+            {
+                "request_id": request_id,
+                "computing_context": context,
+                "language": fields.get("language", "zh"),
+                "stop_reason": fields.get("stop_reason", ""),
+                "filename": filename,
+                "audio_sha256": audio_digest,
+            }
+        )
+        transcription = {
+            "text": transcript.strip(),
+            "language": asr_body.get("language") or fields.get("language", "zh"),
+            "transcript_id": asr_body.get("transcriptId"),
+        }
+        return await self._create_control_action(
+            payload,
+            operation_digest=operation_digest,
+            transcription=transcription,
+        )
+
+    async def _create_control_action(
+        self,
+        payload: dict[str, Any],
+        *,
+        operation_digest: str | None = None,
+        transcription: dict[str, Any] | None = None,
+    ) -> web.Response:
         _require_strings(payload, ("request_id",))
         context = _context(payload.get("computing_context"))
-        operation_digest = canonical_digest(payload)
+        operation_digest = operation_digest or canonical_digest(payload)
         op_key = f"{context['binding_ref']}\0{payload['request_id']}"
         async with self.lock:
             previous = self.control_ops.get(op_key)
@@ -526,6 +628,7 @@ class SandboxApi:
             result=None,
             cause="",
             digest=operation_digest,
+            transcription=transcription,
         )
         response = _action_response(control)
         async with self.lock:
@@ -540,6 +643,43 @@ class SandboxApi:
                 lambda _: self.action_tasks.pop(control.action_id, None)
             )
         return web.json_response(response, status=202)
+
+    async def _audio_upload(
+        self, request: web.Request
+    ) -> tuple[dict[str, str], bytes, str, str]:
+        if not request.content_type.startswith("multipart/"):
+            raise ApiError(415, "unsupported-media-type", "multipart/form-data is required")
+        reader = await request.multipart()
+        fields: dict[str, str] = {}
+        audio: bytes | None = None
+        filename = ""
+        content_type = ""
+        async for field in reader:
+            if field.name != "file" or not field.filename:
+                fields[str(field.name)] = await field.text()
+                continue
+            if audio is not None:
+                raise ApiError(400, "invalid-request", "only one audio file is allowed")
+            filename = Path(field.filename).name
+            if Path(filename).suffix.lower() not in {
+                ".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm"
+            }:
+                raise ApiError(400, "invalid-audio", "unsupported audio type")
+            content_type = field.headers.get("Content-Type", "")
+            chunks: list[bytes] = []
+            size = 0
+            while True:
+                chunk = await field.read_chunk(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > self.media_engine.settings.audio_max_upload_bytes:
+                    raise ApiError(413, "audio-too-large", "audio upload exceeds configured limit")
+                chunks.append(chunk)
+            audio = b"".join(chunks)
+        if not audio:
+            raise ApiError(400, "invalid-audio", "non-empty file field is required")
+        return fields, audio, filename, content_type
 
     async def get_control_action(self, request: web.Request) -> web.Response:
         async with self.lock:
@@ -989,6 +1129,8 @@ def _action_response(action: ControlAction) -> dict[str, Any]:
     }
     if action.result is not None:
         response["result"] = action.result
+    if action.transcription is not None:
+        response["transcription"] = action.transcription
     return response
 
 

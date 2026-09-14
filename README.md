@@ -166,6 +166,7 @@ N6用户面（`28502`）：
 - `DELETE /v1/media-connections/{media_connection_id}`
 - `PUT/GET /v1/recognition-targets/{compute_service_session_id}`
 - `POST /v1/control-actions`
+- `POST /v1/audio-control-actions`（运行期语音动作扩展）
 - `GET /v1/control-actions/{action_id}`
 
 管理接口使用`FREE6GC_COMPUTING_SANDBOX_MANAGEMENT_TOKEN`配置Bearer Token。
@@ -268,9 +269,11 @@ python -m unittest discover -s tests -v
 
 ## ASR
 
-ASR是独立辅助服务，不属于十个Sandbox标准接口。眼镜录音后直接向`9004`
-上传音频，取得`TEXT`后再根据业务状态调用核心网或Sandbox；Sandbox本身不调用
-ASR。该流程只参考原`compute`项目，实现在当前仓库中保持独立。
+ASR是独立辅助服务，不属于十个Sandbox标准接口。Sandbox尚未拉起时，眼镜录制首条
+业务创建语音后直接向`9004`上传音频，取得`TEXT`后调用核心网拉起业务。业务绑定建立后，眼镜可经
+N6向`28502`的`POST /v1/audio-control-actions`上传运行期动作音频，Sandbox校验
+`computing_context`后通过`SANDBOX_ASR_URL`调用内部ASR，并把转写文本接入现有
+意图分类、`ControlAction`状态和机器狗转发链路。该扩展不改变十个标准接口。
 
 接口：
 
@@ -287,6 +290,21 @@ curl http://127.0.0.1:9004/api/v1/transcribe \
   -F source=glasses \
   -F language=zh
 ```
+
+Sandbox已绑定后的运行期语音动作示例：
+
+```bash
+curl -X POST http://127.0.0.1:28502/v1/audio-control-actions \
+  -F request_id=voice-action-001 \
+  -F 'computing_context={"compute_service_session_id":"css-001","compute_instance_id":"ci-001","binding_ref":"binding-css-001","role":"consumer","agent_id":"glasses"}' \
+  -F language=zh \
+  -F file=@speech.wav
+```
+
+成功响应包含`transcription`、`action_id`、`normalized_action`和
+`normalized_parameters`；异步执行状态继续通过原
+`GET /v1/control-actions/{action_id}`查询。默认内部ASR地址为
+`http://127.0.0.1:9004/api/v1/transcribe`，可通过`SANDBOX_ASR_URL`覆盖。
 
 支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载原
 `whisper-large-v3`，使用 CUDA `float16`。默认`initial_prompt`和热词面向机器狗

@@ -34,6 +34,11 @@ class ServiceSettingsTest(TestCase):
             "http://127.0.0.1:8011/api/v1/intent",
             video.intent_url,
         )
+        self.assertEqual(
+            "http://127.0.0.1:9004/api/v1/transcribe",
+            video.asr_url,
+        )
+        self.assertEqual(50 * 1024 * 1024, video.audio_max_upload_bytes)
         self.assertEqual("", video.producer_control_url)
 
     def test_video_host_only_ice_and_class_filters(self) -> None:

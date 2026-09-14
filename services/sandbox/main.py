@@ -63,7 +63,7 @@ def create_app(
     active_runtime = runtime or VideoRuntime.build(active_settings)
     app = web.Application(
         middlewares=[cors_middleware, error_middleware],
-        client_max_size=2 * 1024 * 1024,
+        client_max_size=max(2 * 1024 * 1024, active_settings.audio_max_upload_bytes + 1024 * 1024),
     )
     app[RUNTIME_KEY] = active_runtime
     app.add_routes(
@@ -135,7 +135,10 @@ def create_user_app(runtime: VideoRuntime) -> web.Application:
 def _base_app(runtime: VideoRuntime) -> web.Application:
     app = web.Application(
         middlewares=[cors_middleware, error_middleware],
-        client_max_size=2 * 1024 * 1024,
+        client_max_size=max(
+            2 * 1024 * 1024,
+            runtime.settings.audio_max_upload_bytes + 1024 * 1024,
+        ),
     )
     app[RUNTIME_KEY] = runtime
     return app
