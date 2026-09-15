@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from unittest import TestCase
+import os
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import patch
 
-from services.intent.classifier import RuleIntentClassifier
+from services.intent.classifier import IntentService, RuleIntentClassifier
+from services.intent.config import IntentSettings
 
 
 class RuleIntentClassifierTest(TestCase):
@@ -35,6 +38,12 @@ class RuleIntentClassifierTest(TestCase):
                 self.assertEqual("movement", result.intent)
                 self.assertEqual(direction, result.argument)
 
+    def test_classifies_patrol_and_extracts_area(self) -> None:
+        result = self.classifier.classify("派机器狗巡逻园区内A区域")
+
+        self.assertEqual("patrol", result.intent)
+        self.assertEqual("A区域", result.argument)
+
     def test_classifies_grab_without_target(self) -> None:
         result = self.classifier.classify("请抓取")
 
@@ -46,3 +55,19 @@ class RuleIntentClassifierTest(TestCase):
 
         self.assertEqual("other", result.intent)
         self.assertEqual("", result.argument)
+
+
+class HybridIntentClassifierTest(IsolatedAsyncioTestCase):
+    async def test_explicit_patrol_uses_rules_before_qwen(self) -> None:
+        with patch.dict(os.environ, {"INTENT_BACKEND": "hybrid"}, clear=True):
+            service = IntentService(IntentSettings.from_env())
+        with patch.object(
+            service.qwen,
+            "classify",
+            side_effect=AssertionError("Qwen must not override explicit patrol"),
+        ):
+            result = await service.classify("派机器狗巡逻园区内A区域")
+
+        self.assertEqual("patrol", result["scene"])
+        self.assertEqual("A区域", result["normalized_argument"])
+        self.assertEqual("rules", result["backend"])

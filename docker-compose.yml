@@ -9,7 +9,7 @@ services:
       additional_contexts:
         asr_model: ${ASR_MODEL_SOURCE:-./models/whisper-models/whisper-large-v3}
         intent_model: ${INTENT_MODEL_SOURCE:-./models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct}
-        yolo_models: ${YOLO_MODEL_SOURCE:-../compute/yolo/assets/models}
+        yolo_models: ${YOLO_MODEL_SOURCE:-./models/yolo-models}
     image: ${IMAGE_NAME:-sandbox-lite:latest}
     container_name: ${CONTAINER_NAME:-sandbox-lite}
     env_file:

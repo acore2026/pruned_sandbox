@@ -20,6 +20,7 @@ class IntentSettings:
     model: str
     device: str
     max_new_tokens: int
+    candidates: tuple[str, ...]
 
     @classmethod
     def from_env(cls) -> "IntentSettings":
@@ -31,6 +32,7 @@ class IntentSettings:
             model=os.getenv("INTENT_MODEL", "/models/intent/Qwen2.5-0.5B-Instruct").strip(),
             device=os.getenv("INTENT_DEVICE", "auto").strip(),
             max_new_tokens=_int("INTENT_MAX_NEW_TOKENS", 128),
+            candidates=_candidates(),
         )
 
 
@@ -39,3 +41,12 @@ def _legacy_port() -> int:
         return int(os.getenv("SEMANTIC_ROUTE_PORT", "8011"))
     except ValueError:
         return 8011
+
+
+def _candidates() -> tuple[str, ...]:
+    raw = os.getenv(
+        "INTENT_CANDIDATES",
+        "patrol,movement,find_object,grab,other",
+    )
+    values = tuple(dict.fromkeys(item.strip().lower() for item in raw.split(",") if item.strip()))
+    return values if "other" in values else (*values, "other")

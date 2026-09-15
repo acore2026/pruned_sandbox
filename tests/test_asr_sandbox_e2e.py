@@ -19,23 +19,27 @@ from services.video.config import VideoSettings
 
 
 class FakeWhisperModel:
+    transcript_text = "向左"
+
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 
     def transcribe(self, _path: str, **_kwargs):
         return (
-            iter([SimpleNamespace(start=0.0, end=1.0, text="向左")]),
+            iter([SimpleNamespace(start=0.0, end=1.0, text=self.transcript_text)]),
             SimpleNamespace(language="zh", language_probability=0.99, duration=1.0),
         )
 
 
 class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        FakeWhisperModel.transcript_text = "向左"
         with patch.dict(
             os.environ,
             {
                 "ASR_ENABLED": "true",
                 "ASR_MODEL": "mock-whisper",
+                "ASR_INTENT_URL": "",
                 "YOLO_ENABLED": "false",
                 "SANDBOX_INTENT_URL": "",
                 "WEBRTC_ICE_SERVERS": "",
@@ -127,14 +131,93 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         action = await response.json()
         self.assertEqual(202, response.status, action)
         self.assertEqual("向左", action["transcription"]["text"])
+        self.assertEqual("ACCEPTED", action["status"])
+        self.assertTrue(action["control_triggered"])
+        self.assertEqual(
+            {
+                "executor": "robot dog",
+                "intent": "movement",
+                "direction": "left",
+                "matched": True,
+                "backend": "rules",
+            },
+            action["intent"],
+        )
         self.assertEqual("movement", action["normalized_action"])
         self.assertEqual({"direction": "left"}, action["normalized_parameters"])
 
-        queried = await (
-            await self.sandbox.get(f"/v1/control-actions/{action['action_id']}")
-        ).json()
+        queried = await self._wait_for_completion(action["action_id"])
         self.assertEqual("向左", queried["transcription"]["text"])
+        self.assertTrue(queried["control_triggered"])
+        self.assertEqual("movement", queried["normalized_action"])
+        self.assertEqual({"direction": "left"}, queried["normalized_parameters"])
 
         health = await (await self.asr.get("/health")).json()
         self.assertTrue(health["ready"])
         self.assertEqual("向左", health["latestTranscript"]["text"])
+
+    async def test_non_action_audio_still_returns_transcription(self) -> None:
+        FakeWhisperModel.transcript_text = "今天天气不错"
+        configuration = {
+            "compute_service_session_id": "css-voice-2",
+            "connection_parameters": {
+                "transport": "WEBRTC",
+                "media_connections_path": "/v1/media-connections",
+                "recognition_target_path_template": "/v1/recognition-targets/{compute_service_session_id}",
+            },
+            "participants_network_facts": [
+                {"role": "consumer", "agent_id": "glasses", "up_session_id": "ups-glasses", "pdu_session_id": 1, "ue_ipv4_address": "10.60.0.11", "dnn": "internet", "snssai": "1-010203", "generation": "1"},
+                {"role": "producer", "agent_id": "dog", "up_session_id": "ups-dog", "pdu_session_id": 1, "ue_ipv4_address": "10.60.0.12", "dnn": "internet", "snssai": "1-010203", "generation": "1"},
+            ],
+        }
+        bind = await self.sandbox.post(
+            "/management/v1/compute-session-bindings:bind",
+            json={
+                "activation_idempotency_key": "activate-voice-2",
+                "owner_ref": "ca/css-voice-2",
+                "binding_ref": "binding-voice-2",
+                "compute_service_session_id": "css-voice-2",
+                "compute_instance_id": "ci-voice-2",
+                "configuration": configuration,
+                "configuration_digest": canonical_digest(configuration),
+                "expected_binding_absent": True,
+            },
+        )
+        self.assertEqual(200, bind.status, await bind.text())
+        context = {
+            "compute_service_session_id": "css-voice-2",
+            "compute_instance_id": "ci-voice-2",
+            "binding_ref": "binding-voice-2",
+            "role": "consumer",
+            "agent_id": "glasses",
+        }
+        upload = FormData()
+        upload.add_field("request_id", "audio-non-action-1")
+        upload.add_field("computing_context", json.dumps(context))
+        upload.add_field("language", "zh")
+        upload.add_field("file", b"mock-wave-bytes", filename="voice.wav", content_type="audio/wav")
+        response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
+        body = await response.json()
+        self.assertEqual(202, response.status, body)
+        self.assertEqual("今天天气不错", body["transcription"]["text"])
+        self.assertFalse(body["control_triggered"])
+        self.assertEqual("COMPLETED", body["status"])
+        self.assertEqual("no-control-action", body["cause"])
+        self.assertEqual(
+            {
+                "executor": None,
+                "intent": "other",
+                "matched": False,
+                "backend": "rules",
+            },
+            body["intent"],
+        )
+
+    async def _wait_for_completion(self, action_id: str) -> dict:
+        for _ in range(100):
+            response = await self.sandbox.get(f"/v1/control-actions/{action_id}")
+            body = await response.json()
+            if body["status"] not in {"ACCEPTED", "RUNNING"}:
+                return body
+            await __import__("asyncio").sleep(0.01)
+        self.fail("audio action did not complete")

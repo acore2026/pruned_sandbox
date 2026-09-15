@@ -2,62 +2,64 @@
 
 ## 快速开始
 
-首次创建本地Python虚拟环境并安装依赖：
+### 1. 准备配置
 
 ```bash
 cd /home/aicore/pruned_sandbox
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
+test -f sandbox.env || cp sandbox.env.example sandbox.env
+tailscale ip -4
 ```
 
-使用已经下载到`models/`目录的真实Whisper和Qwen模型启动全部服务：
+将`sandbox.env`中的`VIDEO_PUBLIC_IP`改为本机联调地址；使用Tailscale时可通过
+`tailscale ip -4`查询。
+
+### 2. 使用容器启动（推荐）
 
 ```bash
 cd /home/aicore/pruned_sandbox
-SANDBOX_REAL_MODELS=true ./scripts/run_local.sh
+set -a
+. ./sandbox.env
+set +a
+bash scripts/check_model_sources.sh
+docker compose --env-file sandbox.env up -d --build
 ```
 
-脚本会自动为本地虚拟环境补充CTranslate2需要的CUDA动态库路径。启动端口为：
-
-| 地址 | 用途 |
-| --- | --- |
-| `http://127.0.0.1:28501` | CMF管理面 |
-| `http://127.0.0.1:28502` | N6用户面 |
-| `http://127.0.0.1:9004` | ASR语音转文字 |
-| `http://127.0.0.1:8011` | Intent内部服务 |
-
-检查服务状态：
+首次构建完成后，再次启动可省略`--build`：
 
 ```bash
-curl --noproxy '*' http://127.0.0.1:28501/healthz
-curl --noproxy '*' http://127.0.0.1:28502/healthz
-curl --noproxy '*' http://127.0.0.1:9004/health
-curl --noproxy '*' http://127.0.0.1:8011/health
+cd /home/aicore/pruned_sandbox
+docker compose --env-file sandbox.env up -d
 ```
 
-本地启动会同时输出终端日志并保存滚动文件到`./logs/`：
-
-```text
-logs/asr.log
-logs/intent.log
-logs/sandbox.log
-```
-
-默认每个文件最多10 MiB并保留5个历史文件（`.1`～`.5`）。查看最近日志：
+### 3. 查看状态和日志
 
 ```bash
-tail -n 200 logs/sandbox.log
+cd /home/aicore/pruned_sandbox
+docker compose --env-file sandbox.env ps
+docker compose --env-file sandbox.env logs -f sandbox
+```
+
+宿主机滚动日志：
+
+```bash
+cd /home/aicore/pruned_sandbox
 tail -f logs/asr.log logs/intent.log logs/sandbox.log
 ```
 
-可通过`LOG_DIR`、`LOG_MAX_BYTES`和`LOG_BACKUP_COUNT`调整保存目录、单文件大小与
-保留数量。容器启动时将宿主机`./logs`挂载到容器`/app/logs`，因此重启容器后日志
-仍会保留；`docker compose --env-file sandbox.env logs -f sandbox`仍可同时使用。
-
-Whisper采用首次请求时加载。发送真实音频即可同时完成模型加载和转写验证：
+### 4. 检查接口
 
 ```bash
+cd /home/aicore/pruned_sandbox
+curl --noproxy '*' http://127.0.0.1:28501/healthz
+curl --noproxy '*' http://127.0.0.1:28502/healthz
+curl --noproxy '*' http://127.0.0.1:9004/health
+docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
+```
+
+### 5. 测试语音识别
+
+```bash
+cd /home/aicore/pruned_sandbox
 curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
   -F file=@test_audio/patrol-area-a.mp3 \
   -F session_id=patrol-test \
@@ -66,92 +68,61 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
   -F language=zh
 ```
 
-按`Ctrl-C`会统一停止三个本地进程。没有GPU或只想验证接口时使用轻量模式：
-
-```bash
-./scripts/run_local.sh
-```
-
-轻量模式关闭ASR和YOLO推理，并使用规则意图分类；HTTP接口仍可用于Mock联调。
-
-### 使用Docker容器启动
-
-容器启动会把Whisper、Qwen和YOLO权重直接复制进镜像。默认从当前仓库读取
-Whisper和Qwen，从旧`compute`工程读取唯一使用的通用YOLO权重：
-
-```text
-/home/aicore/
-├── pruned_sandbox/models/
-│   ├── whisper-models/whisper-large-v3/model.bin
-│   └── semantic-models/Qwen/Qwen2.5-0.5B-Instruct/model.safetensors
-└── compute/yolo/assets/models/yolov8s-worldv2.pt
-```
-
-复制环境变量模板。使用上述默认目录时无需修改模型配置：
+停止容器：
 
 ```bash
 cd /home/aicore/pruned_sandbox
-cp sandbox.env.example sandbox.env
-```
-
-模型位于其他目录时，在`sandbox.env`中分别配置其来源，例如：
-
-```dotenv
-ASR_MODEL_SOURCE=/data/models/whisper-large-v3
-INTENT_MODEL_SOURCE=/data/models/Qwen2.5-0.5B-Instruct
-YOLO_MODEL_SOURCE=/data/models/yolo
-FREE6GC_COMPUTING_SANDBOX_MANAGEMENT_TOKEN=replace-with-management-token
-```
-
-Sandbox作为当前GPU机器上的独立容器运行，使用宿主机网络并通过Tailscale与上下游
-通信，不依赖上游Docker网络。先取得本机Tailscale IPv4并写入`sandbox.env`中的
-`VIDEO_PUBLIC_IP`，再检查权重、构建并启动：
-
-```bash
-tailscale ip -4
-bash scripts/check_model_sources.sh
-docker compose --env-file sandbox.env build
-docker compose --env-file sandbox.env up -d
-```
-
-如果`sandbox.env`修改了三个模型源变量，执行检查脚本时需将它们导出到当前Shell；
-Docker Compose也通过`--env-file sandbox.env`读取同一文件。可以执行：
-
-```bash
-set -a
-. ./sandbox.env
-set +a
-bash scripts/check_model_sources.sh
-docker compose --env-file sandbox.env build
-docker compose --env-file sandbox.env up -d
-```
-
-检查容器、三个进程和对外端口：
-
-```bash
-docker compose --env-file sandbox.env ps
-docker compose --env-file sandbox.env logs --tail=100 sandbox
-docker exec sandbox-lite supervisorctl -c /etc/supervisor/conf.d/sandbox.conf status
-curl --noproxy '*' http://127.0.0.1:28501/healthz
-curl --noproxy '*' http://127.0.0.1:28502/healthz
-curl --noproxy '*' http://127.0.0.1:9004/health
-```
-
-容器内的Intent只监听`127.0.0.1:8011`，不会发布到宿主机。需要检查时使用：
-
-```bash
-docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
-```
-
-停止并删除容器（模型仍保留在镜像和宿主机模型源目录中）：
-
-```bash
 docker compose --env-file sandbox.env down
 ```
 
-容器模式需要Docker Compose、NVIDIA Container Toolkit和可用NVIDIA GPU。
-`box0612.pt`、`toy.pt`和`bottles.pt`不再使用，
-不需要复制或下载。
+### 本地运行（不使用容器）
+
+首次准备虚拟环境：
+
+```bash
+cd /home/aicore/pruned_sandbox
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+使用真实模型启动：
+
+```bash
+cd /home/aicore/pruned_sandbox
+SANDBOX_REAL_MODELS=true ./scripts/run_local.sh
+```
+
+按`Ctrl-C`统一停止服务。无GPU的Mock模式执行：
+
+```bash
+cd /home/aicore/pruned_sandbox
+./scripts/run_local.sh
+```
+
+## 运行架构
+
+服务端口：
+
+| 地址 | 用途 |
+| --- | --- |
+| `http://127.0.0.1:28501` | CMF管理面 |
+| `http://127.0.0.1:28502` | N6用户面 |
+| `http://127.0.0.1:9004` | ASR语音转文字 |
+| `http://127.0.0.1:8011` | Intent内部服务 |
+
+容器将Whisper、Qwen和YOLO权重复制进镜像，默认目录如下：
+
+```text
+/home/aicore/pruned_sandbox/models/
+├── whisper-models/whisper-large-v3/model.bin
+├── semantic-models/Qwen/Qwen2.5-0.5B-Instruct/model.safetensors
+└── yolo-models/yolov8s-worldv2.pt
+```
+
+Sandbox作为当前GPU机器上的独立容器运行，使用宿主机网络并通过Tailscale与上下游
+通信，不依赖上游Docker网络。容器模式需要Docker Compose、NVIDIA Container
+Toolkit和可用NVIDIA GPU；`8011`只监听容器内部。
 
 一个镜像、一个容器、四个职责目录和三个独立进程：
 
@@ -209,7 +180,7 @@ cause为`producer-control-endpoint-unconfigured`，不会伪装成已执行。
 
 ## 模型
 
-构建镜像时直接复制原工程权重，不在线下载：
+构建镜像时直接复制当前仓库`models`目录中的权重，不在线下载：
 
 - `whisper-large-v3`
 - `Qwen2.5-0.5B-Instruct`
@@ -218,71 +189,18 @@ cause为`producer-control-endpoint-unconfigured`，不会伪装成已执行。
 默认模型源目录由`sandbox.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`
 和`YOLO_MODEL_SOURCE`配置。运行时无需模型挂载。
 
-## 启动
+## 运行配置说明
 
-Sandbox容器独立运行在当前GPU机器并使用宿主机网络。将`sandbox.env`中的
-`VIDEO_PUBLIC_IP`配置为`tailscale ip -4`返回的本机地址，上下游使用同一地址访问
-`28501`、`28502`和`9004`：
+容器使用宿主机网络，上下游通过`VIDEO_PUBLIC_IP`访问`28501`、`28502`和`9004`。
+容器需要Docker Compose、NVIDIA Container Toolkit及可用GPU。默认基础镜像为
+`nvidia/cuda:13.0.1-devel-ubuntu24.04`，可通过`BASE_IMAGE`覆盖为兼容的本地镜像。
 
-```bash
-cp sandbox.env.example sandbox.env
-# 编辑sandbox.env中的VIDEO_PUBLIC_IP
-bash scripts/check_model_sources.sh
-docker compose --env-file sandbox.env build
-docker compose --env-file sandbox.env up -d
-```
+日志同时输出到终端并滚动保存到`logs/asr.log`、`logs/intent.log`和
+`logs/sandbox.log`。默认单文件上限10 MiB、保留5份历史记录，可通过
+`LOG_DIR`、`LOG_MAX_BYTES`和`LOG_BACKUP_COUNT`调整。
 
-检查Sandbox、ASR和三个进程：
-
-```bash
-curl http://127.0.0.1:28501/healthz
-curl http://127.0.0.1:28502/healthz
-curl http://127.0.0.1:9004/health
-docker exec sandbox-lite supervisorctl -c /etc/supervisor/conf.d/sandbox.conf status
-docker exec sandbox-lite curl -fsS http://127.0.0.1:8011/health
-```
-
-容器需要 NVIDIA Container Toolkit。默认基础镜像为
-`nvidia/cuda:13.0.1-devel-ubuntu24.04`；可通过 `BASE_IMAGE` 使用已缓存
-的兼容 CUDA 镜像。
-
-### 本地Python环境
-
-首次安装和后续进入环境：
-
-```bash
-cd /home/aicore/pruned_sandbox
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-本地无模型或GPU时可使用规则意图并关闭ASR、YOLO，分别在三个终端启动：
-
-```bash
-ASR_ENABLED=false .venv/bin/python -m services.asr.main
-INTENT_BACKEND=rules .venv/bin/python -m services.intent.main
-YOLO_ENABLED=false .venv/bin/python -m services.sandbox.main
-```
-
-也可以使用一个命令启动并统一停止这三个本地进程（默认即采用上述轻量配置）：
-
-```bash
-./scripts/run_local.sh
-```
-
-轻量模式会启动`28501`、`28502`、`9004`和内部`8011`，但ASR推理默认关闭。使用真实
-Whisper时设置`ASR_ENABLED=true`及本地模型路径，例如：
-
-```bash
-ASR_ENABLED=true ASR_MODEL=/path/to/whisper-large-v3 ./scripts/run_local.sh
-```
-
-运行Mock E2E与全部单元测试：
-
-```bash
-python -m unittest discover -s tests -v
-```
+本地轻量模式关闭ASR和YOLO推理，并使用规则意图分类，适合接口Mock；真实模型模式
+会从当前仓库`models/`目录加载Whisper和Qwen。具体命令见顶部“快速开始”。
 
 ## ASR
 
@@ -300,6 +218,7 @@ N6向`28502`的`POST /v1/audio-control-actions`上传运行期动作音频，San
 转写使用 `multipart/form-data` 上传音频文件：
 
 ```bash
+cd /home/aicore/pruned_sandbox
 curl http://127.0.0.1:9004/api/v1/transcribe \
   -F file=@speech.wav \
   -F session_id=demo-room \
@@ -311,6 +230,7 @@ curl http://127.0.0.1:9004/api/v1/transcribe \
 Sandbox已绑定后的运行期语音动作示例：
 
 ```bash
+cd /home/aicore/pruned_sandbox
 curl -X POST http://127.0.0.1:28502/v1/audio-control-actions \
   -F request_id=voice-action-001 \
   -F 'computing_context={"compute_service_session_id":"css-001","compute_instance_id":"ci-001","binding_ref":"binding-css-001","role":"consumer","agent_id":"glasses"}' \
@@ -318,9 +238,19 @@ curl -X POST http://127.0.0.1:28502/v1/audio-control-actions \
   -F file=@speech.wav
 ```
 
-成功响应包含`transcription`、`action_id`、`normalized_action`和
-`normalized_parameters`；异步执行状态继续通过原
-`GET /v1/control-actions/{action_id}`查询。默认内部ASR地址为
+`9004`直连接口会在转写后完成意图识别，一并返回文本和`intent`，但始终不触发控制。
+候选意图由服务端`INTENT_CANDIDATES`预设，眼镜请求无需携带候选列表。
+`intent`使用园区业务槽位：`executor`表示执行主体，`intent`表示业务意图；
+安防巡逻使用`area`参数，移动控制使用`direction`参数，目标相关意图使用`object`参数。
+`matched`和`backend`分别表示是否命中候选意图及实际识别后端。例如
+“派机器狗巡逻园区内A区域”返回`executor=robot dog`、
+`intent=security patrol`和`area=A`。
+
+`28502`会等待转写和意图识别完成后返回`transcription`、`intent`、`action_id`、
+`normalized_action`及`normalized_parameters`。命中运行期控制意图时设置
+`control_triggered=true`并异步下发，初始动作状态为`ACCEPTED`；未命中时设置
+`control_triggered=false`、`status=COMPLETED`且不下发控制，不再将普通语音作为422错误处理。
+动作执行状态继续通过原`GET /v1/control-actions/{action_id}`查询。默认内部ASR地址为
 `http://127.0.0.1:9004/api/v1/transcribe`，可通过`SANDBOX_ASR_URL`覆盖。
 
 支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载原
@@ -337,12 +267,14 @@ curl -X POST http://127.0.0.1:28502/v1/audio-control-actions \
 - `POST /api/v1/semantic/route`（兼容原入口）
 
 ```bash
+cd /home/aicore/pruned_sandbox
 curl http://127.0.0.1:8011/api/v1/intent \
   -H 'Content-Type: application/json' \
   -d '{"text":"帮我找黄色的狗"}'
 ```
 
-意图固定为 `find_object`、`movement`、`grab`、`other`。默认
+默认候选意图为`patrol`、`movement`、`find_object`、`grab`和`other`，可通过
+`INTENT_CANDIDATES`配置。默认
 `INTENT_BACKEND=hybrid`：使用镜像内原 Qwen 模型，模型失败时回退规则。
 
 ## Orange兼容WebRTC接口
@@ -481,6 +413,7 @@ Track 内切换，不重新协商。
 - `GET /health`、`GET /api/health`：YOLO 和帧处理详细状态。
 
 ```bash
+cd /home/aicore/pruned_sandbox
 curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
   -H 'Content-Type: application/json' \
   -d '{"classes":["person","dog"]}'
@@ -492,7 +425,8 @@ curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -v
+cd /home/aicore/pruned_sandbox
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
 测试覆盖三个独立服务、原模型默认值、无会话管理接口，以及真实 aiortc

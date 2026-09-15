@@ -36,6 +36,7 @@ class AsrSettings:
     hotwords: str | None
     max_upload_bytes: int
     concurrency: int
+    intent_url: str
 
     @classmethod
     def from_env(cls) -> "AsrSettings":
@@ -57,6 +58,10 @@ class AsrSettings:
             hotwords=_optional("ASR_HOTWORDS", _DEFAULT_HOTWORDS),
             max_upload_bytes=_int("ASR_MAX_UPLOAD_MB", 50) * 1024 * 1024,
             concurrency=_int("ASR_CONCURRENCY", 1),
+            intent_url=os.getenv(
+                "ASR_INTENT_URL",
+                "http://127.0.0.1:8011/api/v1/intent",
+            ).strip(),
         )
 
 

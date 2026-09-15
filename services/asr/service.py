@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import json
+import logging
 from pathlib import Path
 import threading
 import time
@@ -9,6 +11,9 @@ from typing import Any
 import uuid
 
 from .config import AsrSettings
+
+
+LOGGER = logging.getLogger("sandbox.asr")
 
 
 class SpeechRecognizer:
@@ -137,6 +142,17 @@ class SpeechRecognizer:
             "audioFilename": original_filename,
         }
         self.latest_transcript = result
+        LOGGER.info(
+            "transcription completed session_id=%s task_id=%s source=%s "
+            "language=%s duration_ms=%s processing_ms=%s text=%s",
+            session_id,
+            task_id,
+            source,
+            result["language"],
+            result["durationMs"],
+            result["processingMs"],
+            json.dumps(text, ensure_ascii=False),
+        )
         return result
 
     def health(self) -> dict[str, Any]:

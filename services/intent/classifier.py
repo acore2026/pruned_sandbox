@@ -11,7 +11,7 @@ from typing import Any
 from .config import IntentSettings
 
 
-VALID_INTENTS = {"find_object", "movement", "grab", "other"}
+DEFAULT_INTENTS = {"patrol", "find_object", "movement", "grab", "other"}
 MOVEMENT_COMMANDS = {
     "向前": "forward",
     "向前走": "forward",
@@ -145,6 +145,9 @@ class RuleIntentClassifier:
         movement = self._movement(normalized)
         if movement:
             return IntentResult("movement", movement, 1.0, self.name)
+        patrol = self._patrol(normalized)
+        if patrol is not None:
+            return IntentResult("patrol", patrol, 1.0, self.name)
         grab = self._argument_after_prefix(normalized, GRAB_PREFIXES)
         if grab is not None:
             argument, i18n = self._normalize_object(grab)
@@ -162,6 +165,13 @@ class RuleIntentClassifier:
         if cleaned.startswith("please "):
             cleaned = cleaned[7:]
         return MOVEMENT_COMMANDS.get(cleaned, "")
+
+    @staticmethod
+    def _patrol(text: str) -> str | None:
+        if "巡逻" not in text:
+            return None
+        match = re.search(r"([A-Za-z0-9一二三四五六七八九十]+区域)", text)
+        return match.group(1) if match else ""
 
     @staticmethod
     def _argument_after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
@@ -234,11 +244,11 @@ class QwenIntentClassifier:
         tokenizer, model = self._load()
         prompt = (
             "This is a campus patrol scenario using smart glasses and a robot dog. Classify only "
-            "runtime robot commands into find_object, movement, grab, or other. Return JSON only "
+            f"the request into one of {list(self.settings.candidates)}. Return JSON only "
             "with keys intent and argument. Movement argument must be forward, backward, left, "
             "right, or wave. Examples: 向前=forward, 退后=backward, 向左=left, 向右=right. "
-            "A request to start a campus patrol is a business-session request, not a runtime robot "
-            "command, and must be classified as other. Object arguments must be short English phrases. "
+            "A request to start a campus patrol must be patrol; its argument is the requested area. "
+            "Object arguments must be short English phrases. "
             f"Command: {json.dumps(text, ensure_ascii=False)}"
         )
         messages = [
@@ -260,7 +270,7 @@ class QwenIntentClassifier:
         payload = json.loads(match.group(0))
         intent = str(payload.get("intent") or payload.get("scene") or "other").strip().lower()
         argument = " ".join(str(payload.get("argument") or payload.get("normalized_argument") or "").split())
-        if intent not in VALID_INTENTS:
+        if intent not in self.settings.candidates:
             raise ValueError(f"Unsupported intent from Qwen: {intent}")
         return IntentResult(intent, "" if intent == "other" else argument, 0.9, self.name)
 
@@ -275,6 +285,16 @@ class IntentService:
 
     async def classify(self, text: str) -> dict[str, Any]:
         normalized = " ".join(str(text or "").strip().split())
+        rule_result = self.rules.classify(normalized)
+        if (
+            self.settings.backend == "rules"
+            or rule_result.intent in {"patrol", "movement"}
+        ):
+            if rule_result.intent not in self.settings.candidates:
+                rule_result = IntentResult("other", "", 1.0, self.rules.name)
+            self.last_backend = rule_result.backend
+            self.last_error = None
+            return rule_result.to_dict()
         if self.settings.backend in {"qwen", "hybrid"} and normalized:
             try:
                 result = await asyncio.to_thread(self.qwen.classify, normalized)
@@ -285,7 +305,9 @@ class IntentService:
                 self.last_error = str(exc)
                 if self.settings.backend == "qwen":
                     raise
-        result = self.rules.classify(normalized)
+        result = rule_result
+        if result.intent not in self.settings.candidates:
+            result = IntentResult("other", "", 1.0, self.rules.name)
         self.last_backend = result.backend
         return result.to_dict()
 
@@ -297,5 +319,5 @@ class IntentService:
             "lastBackend": self.last_backend,
             "model": self.settings.model if self.settings.backend != "rules" else None,
             "lastError": self.last_error,
-            "intents": sorted(VALID_INTENTS),
+            "intents": list(self.settings.candidates),
         }

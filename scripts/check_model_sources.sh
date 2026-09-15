@@ -5,7 +5,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(cd -- "${script_dir}/.." && pwd)"
 asr_model_source="${ASR_MODEL_SOURCE:-${project_dir}/models/whisper-models/whisper-large-v3}"
 intent_model_source="${INTENT_MODEL_SOURCE:-${project_dir}/models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct}"
-yolo_model_source="${YOLO_MODEL_SOURCE:-${project_dir}/../compute/yolo/assets/models}"
+yolo_model_source="${YOLO_MODEL_SOURCE:-${project_dir}/models/yolo-models}"
 
 required_files=(
   "${asr_model_source}/model.bin"

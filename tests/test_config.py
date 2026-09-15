@@ -25,6 +25,11 @@ class ServiceSettingsTest(TestCase):
         self.assertEqual("127.0.0.1", video.public_ip)
         self.assertEqual("/models/asr/whisper-large-v3", asr.model)
         self.assertEqual("hybrid", intent.backend)
+        self.assertEqual(
+            ("patrol", "movement", "find_object", "grab", "other"),
+            intent.candidates,
+        )
+        self.assertEqual("http://127.0.0.1:8011/api/v1/intent", asr.intent_url)
         self.assertTrue(video.yolo_enabled)
         self.assertEqual((640, 480), (video.video_width, video.video_height))
         self.assertEqual(30.0, video.video_fps)

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
 import tempfile
 from typing import Any
 
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 
 from services.logging_config import configure_logging
+from services.intent.classifier import RuleIntentClassifier
 
 from .config import AsrSettings
 from .service import SpeechRecognizer
@@ -44,7 +46,7 @@ def create_app(
 
 
 async def health(request: web.Request) -> web.Response:
-    return web.json_response(request.app[RECOGNIZER_KEY].health())
+    return _json_response(request.app[RECOGNIZER_KEY].health())
 
 
 async def transcribe(request: web.Request) -> web.Response:
@@ -59,7 +61,10 @@ async def transcribe(request: web.Request) -> web.Response:
             stop_reason=_optional(fields.get("stop_reason")),
             original_filename=filename,
         )
-        return web.json_response(result)
+        result["intent"] = await _resolve_intent(
+            result["text"], request.app[SETTINGS_KEY]
+        )
+        return _json_response(result)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -115,15 +120,15 @@ async def error_middleware(request: web.Request, handler: Any) -> web.StreamResp
     try:
         return await handler(request)
     except web.HTTPException as exc:
-        return web.json_response(
+        return _json_response(
             {"error": exc.reason.replace(" ", "_").lower(), "message": exc.text},
             status=exc.status,
         )
     except RuntimeError as exc:
-        return web.json_response({"error": "service_unavailable", "message": str(exc)}, status=503)
+        return _json_response({"error": "service_unavailable", "message": str(exc)}, status=503)
     except Exception as exc:
         LOGGER.exception("ASR 请求失败 path=%s", request.path)
-        return web.json_response({"error": "internal_error", "message": str(exc)}, status=500)
+        return _json_response({"error": "internal_error", "message": str(exc)}, status=500)
 
 
 @web.middleware
@@ -138,6 +143,65 @@ async def cors_middleware(request: web.Request, handler: Any) -> web.StreamRespo
 def _optional(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _json_response(payload: Any, *, status: int = 200) -> web.Response:
+    return web.json_response(
+        payload,
+        status=status,
+        dumps=lambda value: json.dumps(value, ensure_ascii=False),
+    )
+
+
+async def _resolve_intent(text: str, settings: AsrSettings) -> dict[str, Any]:
+    payload: dict[str, Any] | None = None
+    if settings.intent_url:
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=15)) as client:
+                async with client.post(settings.intent_url, json={"text": text}) as response:
+                    if response.status == 200:
+                        value = await response.json(content_type=None)
+                        if isinstance(value, dict):
+                            payload = value
+        except Exception as exc:
+            LOGGER.warning("intent service unavailable; using rules error=%s", exc)
+    if payload is None:
+        payload = RuleIntentClassifier().classify(text).to_dict()
+    name = str(payload.get("intent") or payload.get("scene") or "other")
+    argument = str(
+        payload.get("normalized_argument") or payload.get("argument") or ""
+    )
+    return _public_intent(name, argument, str(payload.get("backend") or "rules"))
+
+
+def _public_intent(scene: str, argument: str, backend: str) -> dict[str, Any]:
+    public_names = {
+        "patrol": "security patrol",
+        "movement": "movement",
+        "find_object": "find object",
+        "grab": "grab",
+        "other": "other",
+    }
+    result: dict[str, Any] = {
+        "executor": "robot dog" if scene != "other" else None,
+        "intent": public_names.get(scene, scene),
+    }
+    if scene == "patrol":
+        result["area"] = _normalize_area(argument)
+    elif scene == "movement":
+        result["direction"] = argument
+    elif scene in {"find_object", "grab"}:
+        result["object"] = argument
+    result["matched"] = scene != "other"
+    result["backend"] = backend
+    return result
+
+
+def _normalize_area(argument: str) -> str:
+    normalized = str(argument or "").strip()
+    if normalized.endswith("区域"):
+        normalized = normalized[:-2].strip()
+    return normalized
 
 
 def main() -> None:
