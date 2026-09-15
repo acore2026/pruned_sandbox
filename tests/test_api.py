@@ -59,6 +59,7 @@ class SeparateServiceApiTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(200, response.status)
         self.assertEqual("find_object", payload["scene"])
+        self.assertEqual("robot dog", payload["executor"])
         self.assertEqual("yellow dog", payload["normalized_argument"])
 
     async def test_intent_route_does_not_exist_on_other_services(self) -> None:

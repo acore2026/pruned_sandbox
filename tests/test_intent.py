@@ -39,10 +39,16 @@ class RuleIntentClassifierTest(TestCase):
                 self.assertEqual(direction, result.argument)
 
     def test_classifies_patrol_and_extracts_area(self) -> None:
-        result = self.classifier.classify("派机器狗巡逻园区内A区域")
+        result = self.classifier.classify("派机器狗巡逻园区内A区域").to_dict()
 
-        self.assertEqual("patrol", result.intent)
-        self.assertEqual("A区域", result.argument)
+        self.assertEqual("patrol", result["intent"])
+        self.assertEqual("A区域", result["argument"])
+        self.assertEqual("robot dog", result["executor"])
+
+    def test_other_has_no_executor_skill(self) -> None:
+        result = self.classifier.classify("今天天气怎么样").to_dict()
+
+        self.assertIsNone(result["executor"])
 
     def test_classifies_grab_without_target(self) -> None:
         result = self.classifier.classify("请抓取")

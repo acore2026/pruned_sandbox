@@ -276,6 +276,8 @@ curl http://127.0.0.1:8011/api/v1/intent \
 默认候选意图为`patrol`、`movement`、`find_object`、`grab`和`other`，可通过
 `INTENT_CANDIDATES`配置。默认
 `INTENT_BACKEND=hybrid`：使用镜像内原 Qwen 模型，模型失败时回退规则。
+响应中的`executor`是可直接用于 Agent Discovery `required_skills`的 skill；当前机器狗
+相关意图返回`robot dog`，未命中`other`时返回`null`。
 
 ## Orange兼容WebRTC接口
 

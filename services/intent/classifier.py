@@ -123,6 +123,7 @@ class IntentResult:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "status": "success",
+            "executor": "robot dog" if self.intent != "other" else None,
             "intent": self.intent,
             "scene": self.intent,
             "argument": self.argument,
