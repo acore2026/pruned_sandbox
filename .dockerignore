@@ -1,5 +1,6 @@
 .git
 .venv
+models/
 __pycache__
 *.py[cod]
 *.log

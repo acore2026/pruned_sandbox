@@ -5,11 +5,7 @@ services:
     build:
       context: .
       args:
-        BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-devel-ubuntu24.04}
-      additional_contexts:
-        asr_model: ${ASR_MODEL_SOURCE:-./models/whisper-models/whisper-large-v3}
-        intent_model: ${INTENT_MODEL_SOURCE:-./models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct}
-        yolo_models: ${YOLO_MODEL_SOURCE:-./models/yolo-models}
+        BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
     image: ${IMAGE_NAME:-sandbox-lite:latest}
     container_name: ${CONTAINER_NAME:-sandbox-lite}
     env_file:
@@ -22,7 +18,8 @@ services:
       SANDBOX_USER_PORT: "28502"
       SANDBOX_MANAGEMENT_HOST: "0.0.0.0"
       SANDBOX_MANAGEMENT_PORT: "28501"
-      SANDBOX_ASR_URL: "http://127.0.0.1:9004/api/v1/transcribe"
+      # 9005 only binds to the host loopback interface; it is not an external API.
+      SANDBOX_ASR_URL: "http://127.0.0.1:9005/api/v1/transcribe"
       LOG_DIR: "/app/logs"
       LOG_MAX_BYTES: ${LOG_MAX_BYTES:-10485760}
       LOG_BACKUP_COUNT: ${LOG_BACKUP_COUNT:-5}
@@ -33,6 +30,9 @@ services:
       VIDEO_H264_RTP_PAYLOAD_BYTES: ${VIDEO_H264_RTP_PAYLOAD_BYTES:-1150}
     network_mode: host
     volumes:
+      - ${ASR_MODEL_SOURCE:-./models/whisper-models/whisper-large-v3}:/models/asr/whisper-large-v3:ro
+      - ${INTENT_MODEL_SOURCE:-./models/semantic-models/Qwen/Qwen2.5-0.5B-Instruct}:/models/intent/Qwen2.5-0.5B-Instruct:ro
+      - ${YOLO_MODEL_SOURCE:-./models/yolo-models}:/models/yolo:ro
       - ./logs:/app/logs
     gpus: all
     init: true

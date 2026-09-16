@@ -19,7 +19,7 @@ from services.video.config import VideoSettings
 
 
 class FakeWhisperModel:
-    transcript_text = "向左"
+    transcript_text = "威吓歹徒"
 
     def __init__(self, *_args, **_kwargs) -> None:
         pass
@@ -33,7 +33,7 @@ class FakeWhisperModel:
 
 class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        FakeWhisperModel.transcript_text = "向左"
+        FakeWhisperModel.transcript_text = "威吓歹徒"
         with patch.dict(
             os.environ,
             {
@@ -64,7 +64,7 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         await self.asr.close()
         await self.sandbox.close()
 
-    async def test_sandbox_accepts_audio_and_creates_text_action(self) -> None:
+    async def test_sandbox_accepts_audio_without_creating_control_action(self) -> None:
         configuration = {
             "compute_service_session_id": "css-voice-1",
             "connection_parameters": {
@@ -129,32 +129,23 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         )
         response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
         action = await response.json()
-        self.assertEqual(202, response.status, action)
-        self.assertEqual("向左", action["transcription"]["text"])
-        self.assertEqual("ACCEPTED", action["status"])
-        self.assertTrue(action["control_triggered"])
+        self.assertEqual(200, response.status, action)
+        self.assertEqual("audio-action-1", action["request_id"])
+        self.assertEqual("威吓歹徒", action["text"])
         self.assertEqual(
             {
                 "executor": "robot dog",
                 "intent": "movement",
-                "direction": "left",
+                "direction": "forward",
                 "matched": True,
                 "backend": "rules",
             },
             action["intent"],
         )
-        self.assertEqual("movement", action["normalized_action"])
-        self.assertEqual({"direction": "left"}, action["normalized_parameters"])
-
-        queried = await self._wait_for_completion(action["action_id"])
-        self.assertEqual("向左", queried["transcription"]["text"])
-        self.assertTrue(queried["control_triggered"])
-        self.assertEqual("movement", queried["normalized_action"])
-        self.assertEqual({"direction": "left"}, queried["normalized_parameters"])
 
         health = await (await self.asr.get("/health")).json()
         self.assertTrue(health["ready"])
-        self.assertEqual("向左", health["latestTranscript"]["text"])
+        self.assertEqual("威吓歹徒", health["latestTranscript"]["text"])
 
     async def test_non_action_audio_still_returns_transcription(self) -> None:
         FakeWhisperModel.transcript_text = "今天天气不错"
@@ -198,11 +189,8 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         upload.add_field("file", b"mock-wave-bytes", filename="voice.wav", content_type="audio/wav")
         response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
         body = await response.json()
-        self.assertEqual(202, response.status, body)
-        self.assertEqual("今天天气不错", body["transcription"]["text"])
-        self.assertFalse(body["control_triggered"])
-        self.assertEqual("COMPLETED", body["status"])
-        self.assertEqual("no-control-action", body["cause"])
+        self.assertEqual(200, response.status, body)
+        self.assertEqual("今天天气不错", body["text"])
         self.assertEqual(
             {
                 "executor": None,
@@ -212,12 +200,3 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
             },
             body["intent"],
         )
-
-    async def _wait_for_completion(self, action_id: str) -> dict:
-        for _ in range(100):
-            response = await self.sandbox.get(f"/v1/control-actions/{action_id}")
-            body = await response.json()
-            if body["status"] not in {"ACCEPTED", "RUNNING"}:
-                return body
-            await __import__("asyncio").sleep(0.01)
-        self.fail("audio action did not complete")

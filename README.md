@@ -53,6 +53,7 @@ cd /home/aicore/pruned_sandbox
 curl --noproxy '*' http://127.0.0.1:28501/healthz
 curl --noproxy '*' http://127.0.0.1:28502/healthz
 curl --noproxy '*' http://127.0.0.1:9004/health
+docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:9005/health
 docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
 ```
 
@@ -62,9 +63,7 @@ docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
 cd /home/aicore/pruned_sandbox
 curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
   -F file=@test_audio/patrol-area-a.mp3 \
-  -F session_id=patrol-test \
-  -F task_id=asr-001 \
-  -F source=glasses \
+  -F request_id=asr-001 \
   -F language=zh
 ```
 
@@ -108,10 +107,11 @@ cd /home/aicore/pruned_sandbox
 | --- | --- |
 | `http://127.0.0.1:28501` | CMF管理面 |
 | `http://127.0.0.1:28502` | N6用户面 |
-| `http://127.0.0.1:9004` | ASR语音转文字 |
+| `http://{host}:9004` | 对外独立任务 ASR（眼镜首句语音） |
+| `http://127.0.0.1:9005` | 内部运行期 ASR（仅Sandbox调用） |
 | `http://127.0.0.1:8011` | Intent内部服务 |
 
-容器将Whisper、Qwen和YOLO权重复制进镜像，默认目录如下：
+容器在运行期以只读方式挂载宿主机的Whisper、Qwen和YOLO权重；模型不复制进镜像。默认目录如下：
 
 ```text
 /home/aicore/pruned_sandbox/models/
@@ -122,13 +122,13 @@ cd /home/aicore/pruned_sandbox
 
 Sandbox作为当前GPU机器上的独立容器运行，使用宿主机网络并通过Tailscale与上下游
 通信，不依赖上游Docker网络。容器模式需要Docker Compose、NVIDIA Container
-Toolkit和可用NVIDIA GPU；`8011`只监听容器内部。
+Toolkit和可用NVIDIA GPU；`9005`与`8011`只监听本机回环接口。
 
 一个镜像、一个容器、四个职责目录和三个独立进程：
 
 | 目录 | 进程 | 端口 | 职责 |
 | --- | --- | ---: | --- |
-| `services/asr` | `python -m services.asr.main` | 0.0.0.0:9004（对外） | 眼镜直接调用的faster-whisper语音转文字 |
+| `services/asr` | `python -m services.asr.main` | 0.0.0.0:9004（任务发现）、127.0.0.1:9005（运行期） | 一份faster-whisper模型，双ASR监听端口 |
 | `services/intent` | `python -m services.intent.main` | 127.0.0.1:8011（内部） | 文字语义与意图分类 |
 | `services/sandbox` | `python -m services.sandbox.main` | 0.0.0.0:28501（CMF管理面）、0.0.0.0:28502（N6用户面） | Sandbox标准接口与运行时装配 |
 | `services/video` | 由Sandbox进程加载 | - | WebRTC、YOLO与处理视频输出 |
@@ -138,8 +138,8 @@ HTTP入口，但共享`binding_ref`、幂等记录、WebRTC PeerConnection、识
 和动作状态，避免接口层与媒体层产生两套状态。ASR是眼镜直接调用的独立辅助服务，
 Intent是Sandbox内部推理能力；
 算网会话申请、算力分配和PDU策略仍由Sandbox外部组件管理。
-容器发布CMF管理接口`28501`、N6用户面接口`28502`和独立ASR接口`9004`；
-`8011`仅供容器内部调用。管理路径不会注册到用户面端口，用户路径也不会注册到
+容器对外发布CMF管理接口`28501`、N6用户面接口`28502`和独立ASR接口`9004`；
+`9005`及`8011`仅供容器内部调用。管理路径不会注册到用户面端口，用户路径也不会注册到
 管理面端口。
 
 ## 算网标准接口
@@ -156,44 +156,35 @@ N6用户面（`28502`）：
 - `POST /v1/media-connections`
 - `DELETE /v1/media-connections/{media_connection_id}`
 - `PUT/GET /v1/recognition-targets/{compute_service_session_id}`
-- `POST /v1/control-actions`
-- `POST /v1/audio-control-actions`（运行期语音动作扩展）
-- `GET /v1/control-actions/{action_id}`
+- `POST /v1/audio-control-actions`（兼容入口；只返回文本和意图）
 
 管理接口使用`FREE6GC_COMPUTING_SANDBOX_MANAGEMENT_TOKEN`配置Bearer Token。
 用户面请求必须携带完整`computing_context`，服务按`binding_ref`校验会话、
 实例、角色及Agent。producer和consumer均由终端提交Offer，Sandbox返回
 非Trickle ICE Answer。
 
-`search_object`直接在当前绑定的视频管线上执行一次性搜索，不替换
-`U-RECOGNITION`维护的持续目标。`movement`和`grab`通过
-`SANDBOX_PRODUCER_CONTROL_URL`转发给当前绑定的机器狗；接口文档未规定机器狗
-业务端口，因此该URL由部署方配置，例如
-`http://{ue_ipv4_address}:8080/v1/control-actions`。未配置时动作会进入`FAILED`，
-cause为`producer-control-endpoint-unconfigured`，不会伪装成已执行。
-
-园区巡逻业务建立后的自然语言方向指令由Sandbox归一化为接口文档规定的
-`movement`结构化参数：`向前/前进`对应`direction=forward`，`退后/后退`
-对应`direction=backward`，`向左/左转`对应`direction=left`，`向右/右转`
-对应`direction=right`。`派机器狗巡逻园区内A区域`属于上游业务会话创建意图，
-不作为Sandbox运行期移动动作执行。
+Sandbox不向机器狗发送控制指令。旧的`POST /v1/control-actions`与
+`GET /v1/control-actions/{action_id}`保留路由但固定返回`410 Gone`，避免旧调用方误认为
+Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持续识别目标。
 
 ## 模型
 
-构建镜像时直接复制当前仓库`models`目录中的权重，不在线下载：
+容器启动时从当前仓库`models`目录只读挂载权重，不在线下载，也不将权重写入镜像层：
 
 - `whisper-large-v3`
 - `Qwen2.5-0.5B-Instruct`
 - `yolov8s-worldv2.pt`
 
 默认模型源目录由`sandbox.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`
-和`YOLO_MODEL_SOURCE`配置。运行时无需模型挂载。
+和`YOLO_MODEL_SOURCE`配置。这三个目录是容器启动前的必要条件；`bash scripts/check_model_sources.sh`
+可检查它们是否完整。
 
 ## 运行配置说明
 
 容器使用宿主机网络，上下游通过`VIDEO_PUBLIC_IP`访问`28501`、`28502`和`9004`。
 容器需要Docker Compose、NVIDIA Container Toolkit及可用GPU。默认基础镜像为
-`nvidia/cuda:13.0.1-devel-ubuntu24.04`，可通过`BASE_IMAGE`覆盖为兼容的本地镜像。
+`nvidia/cuda:13.0.1-runtime-ubuntu24.04`；它不包含CUDA编译工具，可显著减小镜像。
+可通过`BASE_IMAGE`覆盖为兼容的本地镜像。
 
 日志同时输出到终端并滚动保存到`logs/asr.log`、`logs/intent.log`和
 `logs/sandbox.log`。默认单文件上限10 MiB、保留5份历史记录，可通过
@@ -204,59 +195,33 @@ cause为`producer-control-endpoint-unconfigured`，不会伪装成已执行。
 
 ## ASR
 
-ASR是独立辅助服务，不属于十个Sandbox标准接口。Sandbox尚未拉起时，眼镜录制首条
-业务创建语音后直接向`9004`上传音频，取得`TEXT`后调用核心网拉起业务。业务绑定建立后，眼镜可经
-N6向`28502`的`POST /v1/audio-control-actions`上传运行期动作音频，Sandbox校验
-`computing_context`后通过`SANDBOX_ASR_URL`调用内部ASR，并把转写文本接入现有
-意图分类、`ControlAction`状态和机器狗转发链路。该扩展不改变十个标准接口。
-
-接口：
-
-- `GET /health`
-- `POST /api/v1/transcribe`
-
-转写使用 `multipart/form-data` 上传音频文件：
+ASR是独立辅助服务，不属于十个Sandbox标准接口。对外接口为`POST /api/v1/transcribe`，
+使用`multipart/form-data`提交`file`、`request_id`和可选`language`：
 
 ```bash
 cd /home/aicore/pruned_sandbox
-curl http://127.0.0.1:9004/api/v1/transcribe \
+curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
   -F file=@speech.wav \
-  -F session_id=demo-room \
-  -F task_id=task-001 \
-  -F source=glasses \
+  -F request_id=asr-001 \
   -F language=zh
 ```
 
-Sandbox已绑定后的运行期语音动作示例：
+响应只包含`request_id`、`text`和`intent`；任务发现实例额外返回`required_skills`。
+同一个ASR进程通过监听端口区分两类请求：`9004`的`discovery`用于Sandbox拉起前的首句任务，
+严格按场景文档映射“巡逻、巡检”为`TASK`和`["patrol", "camera"]`，“实时画面、
+查看现场”为`VIDEO_TASK`和相同技能，“可疑物识别”为`OBJECT_RECOGNITION`和
+`["camera"]`。仅本机可访问的`9005`为`runtime`，用于已建立算力会话后的Sandbox；“威吓歹徒”和“驱逐歹徒”
+均返回`executor=robot dog`、`intent=movement`、`direction=forward`。任意音频都返回
+转写文本；任务发现未命中时为`intent.type=UNKNOWN`，运行期未命中时为
+`intent.matched=false`。
 
-```bash
-cd /home/aicore/pruned_sandbox
-curl -X POST http://127.0.0.1:28502/v1/audio-control-actions \
-  -F request_id=voice-action-001 \
-  -F 'computing_context={"compute_service_session_id":"css-001","compute_instance_id":"ci-001","binding_ref":"binding-css-001","role":"consumer","agent_id":"glasses"}' \
-  -F language=zh \
-  -F file=@speech.wav
-```
+`POST /v1/audio-control-actions`仅为已绑定会话保留兼容入口；它校验
+`computing_context`后调用本机`9005`，返回文本和运行期动作意图，不创建动作任务，也不控制机器狗。
 
-`9004`直连接口会在转写后完成意图识别，一并返回文本和`intent`，但始终不触发控制。
-候选意图由服务端`INTENT_CANDIDATES`预设，眼镜请求无需携带候选列表。
-`intent`使用园区业务槽位：`executor`表示执行主体，`intent`表示业务意图；
-安防巡逻使用`area`参数，移动控制使用`direction`参数，目标相关意图使用`object`参数。
-`matched`和`backend`分别表示是否命中候选意图及实际识别后端。例如
-“派机器狗巡逻园区内A区域”返回`executor=robot dog`、
-`intent=security patrol`和`area=A`。
-
-`28502`会等待转写和意图识别完成后返回`transcription`、`intent`、`action_id`、
-`normalized_action`及`normalized_parameters`。命中运行期控制意图时设置
-`control_triggered=true`并异步下发，初始动作状态为`ACCEPTED`；未命中时设置
-`control_triggered=false`、`status=COMPLETED`且不下发控制，不再将普通语音作为422错误处理。
-动作执行状态继续通过原`GET /v1/control-actions/{action_id}`查询。默认内部ASR地址为
-`http://127.0.0.1:9004/api/v1/transcribe`，可通过`SANDBOX_ASR_URL`覆盖。
-
-支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载原
-`whisper-large-v3`，使用 CUDA `float16`。默认`initial_prompt`和热词面向机器狗
-园区巡逻场景，覆盖园区、区域、巡逻及四个方向；部署方仍可通过
-`ASR_INITIAL_PROMPT`和`ASR_HOTWORDS`覆盖。
+支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载
+`whisper-large-v3`，使用 CUDA `float16`。可通过`ASR_INITIAL_PROMPT`、`ASR_HOTWORDS`、
+`ASR_DISCOVERY_HOST`、`ASR_DISCOVERY_PORT`、`ASR_RUNTIME_HOST`和`ASR_RUNTIME_PORT`配置监听地址。详细交接契约见
+`AR眼镜语音识别与意图接口定义.md`。
 
 ## 意图分类
 
@@ -273,9 +238,10 @@ curl http://127.0.0.1:8011/api/v1/intent \
   -d '{"text":"帮我找黄色的狗"}'
 ```
 
-默认候选意图为`patrol`、`movement`、`find_object`、`grab`和`other`，可通过
+默认候选意图包含场景映射的`patrol`、`video_task`、`object_recognition`、`defense`、
+`movement`，以及兼容原语义路由的`find_object`、`grab`和`other`，可通过
 `INTENT_CANDIDATES`配置。默认
-`INTENT_BACKEND=hybrid`：使用镜像内原 Qwen 模型，模型失败时回退规则。
+`INTENT_BACKEND=hybrid`：使用宿主机挂载的原 Qwen 模型，模型失败时回退规则。
 响应中的`executor`是可直接用于 Agent Discovery `required_skills`的 skill；当前机器狗
 相关意图返回`robot dog`，未命中`other`时返回`null`。
 

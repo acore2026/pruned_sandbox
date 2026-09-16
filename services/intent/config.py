@@ -46,7 +46,7 @@ def _legacy_port() -> int:
 def _candidates() -> tuple[str, ...]:
     raw = os.getenv(
         "INTENT_CANDIDATES",
-        "patrol,movement,find_object,grab,other",
+        "patrol,video_task,object_recognition,defense,movement,find_object,grab,other",
     )
     values = tuple(dict.fromkeys(item.strip().lower() for item in raw.split(",") if item.strip()))
     return values if "other" in values else (*values, "other")

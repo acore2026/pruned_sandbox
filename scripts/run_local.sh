@@ -65,6 +65,6 @@ child_pids="$child_pids $!"
 
 echo "Sandbox management is starting at http://127.0.0.1:28501"
 echo "Sandbox user plane is starting at http://127.0.0.1:28502 (Ctrl-C to stop)."
-echo "ASR is starting at http://127.0.0.1:9004; Intent is internal at 127.0.0.1:8011."
+echo "Discovery ASR is starting at http://127.0.0.1:9004; runtime ASR is internal at 127.0.0.1:9005; Intent is internal at 127.0.0.1:8011."
 echo "Rolling logs are stored in $LOG_DIR (max $LOG_MAX_BYTES bytes, $LOG_BACKUP_COUNT backups per service)."
 wait

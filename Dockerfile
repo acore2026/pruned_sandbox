@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG BASE_IMAGE=nvidia/cuda:13.0.1-devel-ubuntu24.04
+ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -55,16 +55,8 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
         --extra-index-url "${TORCH_INDEX_URL}" \
     && pip install -r requirements.txt --index-url "${PYPI_MIRROR_URL}"
 
-# 这三个命名构建上下文由 docker-compose.yml 分别指向本地模型目录。
-# 模型直接进入镜像，不在构建或运行阶段联网下载。
-COPY --from=asr_model / /models/asr/whisper-large-v3/
-COPY --from=intent_model / /models/intent/Qwen2.5-0.5B-Instruct/
-COPY --from=yolo_models / /models/yolo/
-RUN test -s /models/asr/whisper-large-v3/model.bin \
-    && test -s /models/asr/whisper-large-v3/config.json \
-    && test -s /models/intent/Qwen2.5-0.5B-Instruct/model.safetensors \
-    && test -s /models/intent/Qwen2.5-0.5B-Instruct/config.json \
-    && test -s /models/yolo/yolov8s-worldv2.pt
+# 三套模型均在运行期由 docker-compose.yml 以只读卷挂载到 /models。
+# 因此模型权重不会进入镜像层，也不会在构建或运行阶段联网下载。
 
 COPY services /app/services
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/sandbox.conf
@@ -77,6 +69,7 @@ RUN useradd --create-home --uid 10001 sandbox \
 EXPOSE 9004 28501 28502
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
     CMD curl --noproxy '*' -fsS http://127.0.0.1:9004/health >/dev/null \
+        && curl --noproxy '*' -fsS http://127.0.0.1:9005/health >/dev/null \
         && curl --noproxy '*' -fsS http://127.0.0.1:8011/health >/dev/null \
         && curl --noproxy '*' -fsS http://127.0.0.1:28501/healthz >/dev/null \
         && curl --noproxy '*' -fsS http://127.0.0.1:28502/healthz >/dev/null \

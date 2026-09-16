@@ -11,7 +11,17 @@ from typing import Any
 from .config import IntentSettings
 
 
-DEFAULT_INTENTS = {"patrol", "find_object", "movement", "grab", "other"}
+DEFAULT_INTENTS = {
+    "patrol",
+    "video_task",
+    "object_recognition",
+    "defense",
+    "movement",
+    "other",
+}
+DEFENSE_KEYWORDS = ("威吓", "驱逐")
+VIDEO_TASK_KEYWORDS = ("实时画面", "查看现场")
+OBJECT_RECOGNITION_KEYWORDS = ("可疑物识别", "识别可疑物")
 MOVEMENT_COMMANDS = {
     "向前": "forward",
     "向前走": "forward",
@@ -149,6 +159,12 @@ class RuleIntentClassifier:
         patrol = self._patrol(normalized)
         if patrol is not None:
             return IntentResult("patrol", patrol, 1.0, self.name)
+        if self._video_task(normalized):
+            return IntentResult("video_task", "", 1.0, self.name)
+        if self._object_recognition(normalized):
+            return IntentResult("object_recognition", "", 1.0, self.name)
+        if self._defense(normalized):
+            return IntentResult("defense", "suspect", 1.0, self.name)
         grab = self._argument_after_prefix(normalized, GRAB_PREFIXES)
         if grab is not None:
             argument, i18n = self._normalize_object(grab)
@@ -169,10 +185,24 @@ class RuleIntentClassifier:
 
     @staticmethod
     def _patrol(text: str) -> str | None:
-        if "巡逻" not in text:
+        if "巡逻" not in text and "巡检" not in text:
             return None
         match = re.search(r"([A-Za-z0-9一二三四五六七八九十]+区域)", text)
         return match.group(1) if match else ""
+
+    @staticmethod
+    def _defense(text: str) -> bool:
+        return any(keyword in text for keyword in DEFENSE_KEYWORDS)
+
+    @staticmethod
+    def _video_task(text: str) -> bool:
+        return any(keyword in text for keyword in VIDEO_TASK_KEYWORDS)
+
+    @staticmethod
+    def _object_recognition(text: str) -> bool:
+        return any(keyword in text for keyword in OBJECT_RECOGNITION_KEYWORDS) or (
+            "可疑物" in text and "识别" in text
+        )
 
     @staticmethod
     def _argument_after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
@@ -248,8 +278,10 @@ class QwenIntentClassifier:
             f"the request into one of {list(self.settings.candidates)}. Return JSON only "
             "with keys intent and argument. Movement argument must be forward, backward, left, "
             "right, or wave. Examples: 向前=forward, 退后=backward, 向左=left, 向右=right. "
-            "A request to start a campus patrol must be patrol; its argument is the requested area. "
-            "Object arguments must be short English phrases. "
+            "A request to start a campus patrol or inspection must be patrol; its argument is "
+            "the requested area. Requests for a live view or to view the site must be video_task. "
+            "Requests for suspicious-object recognition must be object_recognition. Commands to "
+            "threaten or expel a suspect must be defense; its argument is suspect. "
             f"Command: {json.dumps(text, ensure_ascii=False)}"
         )
         messages = [
@@ -289,7 +321,8 @@ class IntentService:
         rule_result = self.rules.classify(normalized)
         if (
             self.settings.backend == "rules"
-            or rule_result.intent in {"patrol", "movement"}
+            or rule_result.intent
+            in {"patrol", "video_task", "object_recognition", "defense", "movement"}
         ):
             if rule_result.intent not in self.settings.candidates:
                 rule_result = IntentResult("other", "", 1.0, self.rules.name)

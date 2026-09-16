@@ -26,10 +26,20 @@ class ServiceSettingsTest(TestCase):
         self.assertEqual("/models/asr/whisper-large-v3", asr.model)
         self.assertEqual("hybrid", intent.backend)
         self.assertEqual(
-            ("patrol", "movement", "find_object", "grab", "other"),
+            (
+                "patrol",
+                "video_task",
+                "object_recognition",
+                "defense",
+                "movement",
+                "find_object",
+                "grab",
+                "other",
+            ),
             intent.candidates,
         )
         self.assertEqual("http://127.0.0.1:8011/api/v1/intent", asr.intent_url)
+        self.assertEqual("runtime", asr.intent_profile)
         self.assertTrue(video.yolo_enabled)
         self.assertEqual((640, 480), (video.video_width, video.video_height))
         self.assertEqual(30.0, video.video_fps)
@@ -40,7 +50,7 @@ class ServiceSettingsTest(TestCase):
             video.intent_url,
         )
         self.assertEqual(
-            "http://127.0.0.1:9004/api/v1/transcribe",
+            "http://127.0.0.1:9005/api/v1/transcribe",
             video.asr_url,
         )
         self.assertEqual(50 * 1024 * 1024, video.audio_max_upload_bytes)

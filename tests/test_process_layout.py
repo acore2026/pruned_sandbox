@@ -15,7 +15,7 @@ class ProcessLayoutTest(TestCase):
             self.assertTrue((service_dir / "main.py").is_file())
         self.assertTrue((ROOT / "services" / "video" / "rtc_server.py").is_file())
 
-    def test_supervisor_starts_exactly_three_service_programs(self) -> None:
+    def test_supervisor_starts_three_processes_and_asr_owns_dual_listeners(self) -> None:
         parser = ConfigParser()
         parser.read(ROOT / "deploy" / "supervisord.conf", encoding="utf-8")
         programs = {section for section in parser.sections() if section.startswith("program:")}
@@ -28,13 +28,20 @@ class ProcessLayoutTest(TestCase):
             parser["program:sandbox"]["command"],
         )
 
-    def test_image_copies_original_model_contexts(self) -> None:
+    def test_container_mounts_models_instead_of_copying_them(self) -> None:
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
-        for context in ("asr_model", "intent_model", "yolo_models"):
-            self.assertIn(f"{context}:", compose)
-            self.assertIn(f"COPY --from={context}", dockerfile)
+        self.assertIn("ASR_MODEL_SOURCE", compose)
+        self.assertIn("INTENT_MODEL_SOURCE", compose)
+        self.assertIn("YOLO_MODEL_SOURCE", compose)
+        self.assertIn(":/models/asr/whisper-large-v3:ro", compose)
+        self.assertIn(":/models/intent/Qwen2.5-0.5B-Instruct:ro", compose)
+        self.assertIn(":/models/yolo:ro", compose)
+        self.assertNotIn("additional_contexts", compose)
+        self.assertNotIn("COPY --from=asr_model", dockerfile)
+        self.assertNotIn("COPY --from=intent_model", dockerfile)
+        self.assertNotIn("COPY --from=yolo_models", dockerfile)
         self.assertNotIn("yolo11n", dockerfile)
         self.assertNotIn("ASR_MODEL_ID=small", dockerfile)
 
@@ -46,3 +53,5 @@ class ProcessLayoutTest(TestCase):
         self.assertNotIn("compose_n6", compose)
         self.assertNotIn("UPF_N6_IP", compose)
         self.assertIn("EXPOSE 9004 28501 28502", dockerfile)
+        self.assertNotIn("EXPOSE 9004 9005", dockerfile)
+        self.assertIn("127.0.0.1:9005/health", dockerfile)

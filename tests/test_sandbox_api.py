@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
@@ -182,7 +181,7 @@ class SandboxContractApiTest(IsolatedAsyncioTestCase):
             headers={"Authorization": "Bearer secret"},
         )
 
-    async def test_binding_media_recognition_control_and_unbind(self) -> None:
+    async def test_binding_media_recognition_control_is_disabled_and_unbind(self) -> None:
         response = await self.bind()
         self.assertEqual(200, response.status, await response.text())
         binding = await response.json()
@@ -244,46 +243,8 @@ class SandboxContractApiTest(IsolatedAsyncioTestCase):
             },
         )
         action = await response.json()
-        self.assertEqual(202, response.status, action)
-        self.assertEqual("movement", action["normalized_action"])
-        completed = await self._wait_for_action(action["action_id"])
-        self.assertEqual("COMPLETED", completed["status"])
-        self.assertTrue(completed["result"]["executed"])
-
-        response = await self.client.post(
-            "/v1/control-actions",
-            json={
-                "request_id": "action-text-left-1",
-                "computing_context": self.context,
-                "input": {"type": "TEXT", "text": "向左", "language": "zh"},
-            },
-        )
-        text_action = await response.json()
-        self.assertEqual(202, response.status, text_action)
-        self.assertEqual("movement", text_action["normalized_action"])
-        self.assertEqual({"direction": "left"}, text_action["normalized_parameters"])
-        await self._wait_for_action(text_action["action_id"])
-        self.assertEqual(
-            {"direction": "left"}, self.control_adapter.calls[-1]["parameters"]
-        )
-        self.assertEqual("10.60.0.12", self.control_adapter.calls[0]["endpoint_context"]["ue_ipv4_address"])
-
-        response = await self.client.post(
-            "/v1/control-actions",
-            json={
-                "request_id": "search-1",
-                "computing_context": self.context,
-                "action": "search_object",
-                "input": {"type": "STRUCTURED"},
-                "parameters": {"query": "cup", "timeout_ms": 1000},
-            },
-        )
-        search = await response.json()
-        self.assertEqual(202, response.status, search)
-        search = await self._wait_for_action(search["action_id"])
-        self.assertEqual("COMPLETED", search["status"])
-        self.assertEqual("cup", search["result"]["matches"][0]["label"])
-        self.assertEqual("red doll", self.engine.targets["binding-1"])
+        self.assertEqual(410, response.status, action)
+        self.assertEqual("control-actions-disabled", action["error"]["code"])
 
         response = await self.client.post(
             "/management/v1/compute-session-bindings/binding-1:unbind",
@@ -297,15 +258,6 @@ class SandboxContractApiTest(IsolatedAsyncioTestCase):
         unbound = await response.json()
         self.assertEqual("UNBOUND", unbound["state"])
         self.assertEqual("activate-1", unbound["activation_idempotency_key"])
-
-    async def _wait_for_action(self, action_id: str) -> dict:
-        for _ in range(20):
-            response = await self.client.get(f"/v1/control-actions/{action_id}")
-            payload = await response.json()
-            if payload["status"] not in {"ACCEPTED", "RUNNING"}:
-                return payload
-            await asyncio.sleep(0.01)
-        self.fail(f"action {action_id} did not finish")
 
     async def test_management_auth_and_idempotency_conflict(self) -> None:
         response = await self.client.get(

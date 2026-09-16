@@ -504,10 +504,14 @@ class SandboxApi:
         return web.json_response(response)
 
     async def create_control_action(self, request: web.Request) -> web.Response:
-        payload = await _json_object(request)
-        return await self._create_control_action(payload)
+        raise ApiError(
+            410,
+            "control-actions-disabled",
+            "Sandbox no longer sends machine-dog control actions",
+        )
 
     async def create_audio_control_action(self, request: web.Request) -> web.Response:
+        """Compatibility endpoint for bound sessions; it has no control side effect."""
         fields, audio, filename, content_type = await self._audio_upload(request)
         request_id = fields.get("request_id", "").strip()
         try:
@@ -520,7 +524,7 @@ class SandboxApi:
             ) from exc
         context = _context(context_value)
         async with self.lock:
-            binding = self._validate_context(context)
+            self._validate_context(context)
         if context["role"] != "consumer":
             raise ApiError(
                 409,
@@ -535,12 +539,8 @@ class SandboxApi:
         if self.http is None:
             self.http = ClientSession(timeout=ClientTimeout(total=120))
         upload = FormData()
-        upload.add_field("session_id", context["compute_service_session_id"])
-        upload.add_field("task_id", request_id)
-        upload.add_field("source", "glasses-via-sandbox")
+        upload.add_field("request_id", request_id)
         upload.add_field("language", fields.get("language", "zh"))
-        if fields.get("stop_reason"):
-            upload.add_field("stop_reason", fields["stop_reason"])
         upload.add_field(
             "file",
             audio,
@@ -562,100 +562,21 @@ class SandboxApi:
         transcript = asr_body.get("text") if isinstance(asr_body, dict) else None
         if not isinstance(transcript, str) or not transcript.strip():
             raise ApiError(422, "empty-transcription", "ASR returned no usable text")
-
-        payload = {
+        intent = asr_body.get("intent") if isinstance(asr_body, dict) else None
+        if not isinstance(intent, dict):
+            raise ApiError(502, "asr-failed", "ASR returned an invalid intent")
+        response = {
             "request_id": request_id,
-            "computing_context": context,
-            "input": {
-                "type": "TEXT",
-                "text": transcript.strip(),
-                "language": fields.get("language", "zh"),
-            },
-        }
-        audio_digest = hashlib.sha256(audio).hexdigest()
-        operation_digest = canonical_digest(
-            {
-                "request_id": request_id,
-                "computing_context": context,
-                "language": fields.get("language", "zh"),
-                "stop_reason": fields.get("stop_reason", ""),
-                "filename": filename,
-                "audio_sha256": audio_digest,
-            }
-        )
-        transcription = {
             "text": transcript.strip(),
-            "language": asr_body.get("language") or fields.get("language", "zh"),
-            "transcript_id": asr_body.get("transcriptId"),
+            "intent": intent,
         }
-        raw_intent = asr_body.get("intent") if isinstance(asr_body, dict) else None
-        if isinstance(raw_intent, dict) and isinstance(raw_intent.get("intent"), str):
-            intent = dict(raw_intent)
-            classified = _classification_from_public_intent(intent)
-        else:
-            classified = await self._classify(transcript.strip())
-            intent = _public_intent(classified, "rules")
-        op_key = f"{context['binding_ref']}\0{request_id}"
-        async with self.lock:
-            previous = self.control_ops.get(op_key)
-            if previous is not None:
-                _verify_retry(previous, operation_digest)
-                action_id = previous.response["action_id"]
-                return web.json_response(
-                    _action_response(self.actions[action_id]), status=202
-                )
-            control = ControlAction(
-                request_id=request_id,
-                context=context,
-                action_id=f"action-{uuid4().hex}",
-                status="COMPLETED",
-                normalized_action=None,
-                normalized_parameters={},
-                digest=operation_digest,
-                control_triggered=False,
-                intent=intent,
-                transcription=transcription,
-            )
-        try:
-            action, parameters = await self._control_action(payload, classified)
-            _validate_action_role(action, payload.get("target"))
-        except ApiError as exc:
-            if exc.code != "invalid-control-action":
-                raise
-            control.cause = "no-control-action"
-            LOGGER.info(
-                "audio transcription did not trigger control request_id=%s action_id=%s text=%s",
-                request_id,
-                control.action_id,
-                json.dumps(transcription["text"], ensure_ascii=False),
-            )
-        else:
-            control.status = "ACCEPTED"
-            control.normalized_action = action
-            control.normalized_parameters = parameters
-            control.control_triggered = True
-            LOGGER.info(
-                "audio transcription triggered control request_id=%s action_id=%s action=%s parameters=%s",
-                request_id,
-                control.action_id,
-                action,
-                json.dumps(parameters, ensure_ascii=False, separators=(",", ":")),
-            )
-
-        response = _action_response(control)
-        async with self.lock:
-            self.actions[control.action_id] = control
-            self.control_ops[op_key] = StoredOperation(operation_digest, response)
-            if control.control_triggered:
-                task = asyncio.create_task(
-                    self._execute_control_action(control, binding),
-                    name=f"control-action:{control.action_id}",
-                )
-                self.action_tasks[control.action_id] = task
-                task.add_done_callback(
-                    lambda _: self.action_tasks.pop(control.action_id, None)
-                )
-        return web.json_response(response, status=202)
+        LOGGER.info(
+            "runtime audio recognized request_id=%s text=%s intent=%s",
+            request_id,
+            json.dumps(transcript.strip(), ensure_ascii=False),
+            json.dumps(intent, ensure_ascii=False, separators=(",", ":")),
+        )
+        return web.json_response(response)
 
     async def _create_control_action(
         self,
@@ -752,16 +673,11 @@ class SandboxApi:
         return fields, audio, filename, content_type
 
     async def get_control_action(self, request: web.Request) -> web.Response:
-        async with self.lock:
-            action = self.actions.get(request.match_info["action_id"])
-            if action is None:
-                raise ApiError(
-                    404,
-                    "control-action-not-found",
-                    "control action does not exist",
-                )
-            response = _action_response(action)
-        return web.json_response(response)
+        raise ApiError(
+            410,
+            "control-actions-disabled",
+            "Sandbox no longer sends machine-dog control actions",
+        )
 
     async def _execute_control_action(
         self,

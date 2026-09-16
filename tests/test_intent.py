@@ -39,16 +39,31 @@ class RuleIntentClassifierTest(TestCase):
                 self.assertEqual(direction, result.argument)
 
     def test_classifies_patrol_and_extracts_area(self) -> None:
-        result = self.classifier.classify("派机器狗巡逻园区内A区域").to_dict()
-
-        self.assertEqual("patrol", result["intent"])
-        self.assertEqual("A区域", result["argument"])
-        self.assertEqual("robot dog", result["executor"])
+        for text in ("派机器狗巡逻园区内A区域", "请机器狗巡检园区内A区域"):
+            with self.subTest(text=text):
+                result = self.classifier.classify(text).to_dict()
+                self.assertEqual("patrol", result["intent"])
+                self.assertEqual("A区域", result["argument"])
+                self.assertEqual("robot dog", result["executor"])
 
     def test_other_has_no_executor_skill(self) -> None:
         result = self.classifier.classify("今天天气怎么样").to_dict()
 
         self.assertIsNone(result["executor"])
+
+    def test_classifies_threaten_and_expel_as_defense(self) -> None:
+        for command in ("威吓歹徒", "驱逐歹徒"):
+            with self.subTest(command=command):
+                result = self.classifier.classify(command)
+                self.assertEqual("defense", result.intent)
+                self.assertEqual("suspect", result.argument)
+
+    def test_classifies_scene_document_discovery_intents(self) -> None:
+        classifier = RuleIntentClassifier()
+        self.assertEqual("video_task", classifier.classify("查看机器狗实时画面").intent)
+        self.assertEqual(
+            "object_recognition", classifier.classify("识别园区内可疑物").intent
+        )
 
     def test_classifies_grab_without_target(self) -> None:
         result = self.classifier.classify("请抓取")

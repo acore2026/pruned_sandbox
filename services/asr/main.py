@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+from dataclasses import replace
 import json
 import logging
 import os
 from pathlib import Path
+import signal
 import tempfile
 from typing import Any
 
@@ -52,19 +55,28 @@ async def health(request: web.Request) -> web.Response:
 async def transcribe(request: web.Request) -> web.Response:
     temp_path, filename, fields = await _read_audio_upload(request)
     try:
+        request_id = _required_request_id(fields)
         result = await request.app[RECOGNIZER_KEY].transcribe(
             temp_path,
             language=_optional(fields.get("language")),
-            session_id=fields.get("session_id", "demo-room"),
-            task_id=fields.get("task_id", "demo-room"),
-            source=fields.get("source", "client"),
-            stop_reason=_optional(fields.get("stop_reason")),
+            session_id=request_id,
+            task_id=request_id,
+            source="glasses",
+            stop_reason=None,
             original_filename=filename,
         )
-        result["intent"] = await _resolve_intent(
+        intent = await _resolve_intent(
             result["text"], request.app[SETTINGS_KEY]
         )
-        return _json_response(result)
+        response: dict[str, Any] = {
+            "request_id": request_id,
+            "text": result["text"],
+            "intent": intent,
+        }
+        settings = request.app[SETTINGS_KEY]
+        if settings.intent_profile == "discovery":
+            response["required_skills"] = _discovery_skills(intent)
+        return _json_response(response)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -121,14 +133,24 @@ async def error_middleware(request: web.Request, handler: Any) -> web.StreamResp
         return await handler(request)
     except web.HTTPException as exc:
         return _json_response(
-            {"error": exc.reason.replace(" ", "_").lower(), "message": exc.text},
+            {
+                "error": {
+                    "code": exc.reason.replace(" ", "_").lower(),
+                    "message": exc.text,
+                }
+            },
             status=exc.status,
         )
     except RuntimeError as exc:
-        return _json_response({"error": "service_unavailable", "message": str(exc)}, status=503)
+        return _json_response(
+            {"error": {"code": "service_unavailable", "message": str(exc)}},
+            status=503,
+        )
     except Exception as exc:
         LOGGER.exception("ASR 请求失败 path=%s", request.path)
-        return _json_response({"error": "internal_error", "message": str(exc)}, status=500)
+        return _json_response(
+            {"error": {"code": "internal_error", "message": str(exc)}}, status=500
+        )
 
 
 @web.middleware
@@ -143,6 +165,13 @@ async def cors_middleware(request: web.Request, handler: Any) -> web.StreamRespo
 def _optional(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _required_request_id(fields: dict[str, str]) -> str:
+    request_id = str(fields.get("request_id") or "").strip()
+    if not request_id:
+        raise web.HTTPBadRequest(text="request_id field is required")
+    return request_id
 
 
 def _json_response(payload: Any, *, status: int = 200) -> web.Response:
@@ -171,30 +200,52 @@ async def _resolve_intent(text: str, settings: AsrSettings) -> dict[str, Any]:
     argument = str(
         payload.get("normalized_argument") or payload.get("argument") or ""
     )
-    return _public_intent(name, argument, str(payload.get("backend") or "rules"))
+    backend = str(payload.get("backend") or "rules")
+    return _public_intent(name, argument, settings.intent_profile, backend)
 
 
-def _public_intent(scene: str, argument: str, backend: str) -> dict[str, Any]:
-    public_names = {
-        "patrol": "security patrol",
-        "movement": "movement",
-        "find_object": "find object",
-        "grab": "grab",
-        "other": "other",
+def _public_intent(
+    scene: str, argument: str, profile: str, backend: str = "rules"
+) -> dict[str, Any]:
+    normalized_scene = str(scene or "other").strip().lower()
+    if profile == "discovery" and normalized_scene == "patrol":
+        parameters: dict[str, str] = {}
+        area = _normalize_area(argument)
+        if area:
+            parameters["area"] = area
+        return {"type": "TASK", "parameters": parameters}
+    if profile == "discovery" and normalized_scene == "video_task":
+        return {"type": "VIDEO_TASK", "parameters": {}}
+    if profile == "discovery" and normalized_scene == "object_recognition":
+        return {"type": "OBJECT_RECOGNITION", "parameters": {}}
+    if profile == "runtime" and normalized_scene in {"defense", "movement"}:
+        direction = "forward" if normalized_scene == "defense" else str(argument).strip()
+        if direction not in {"forward", "backward", "left", "right", "wave"}:
+            direction = "forward"
+        return {
+            "executor": "robot dog",
+            "intent": "movement",
+            "direction": direction,
+            "matched": True,
+            "backend": backend,
+        }
+    if profile == "discovery":
+        return {"type": "UNKNOWN", "parameters": {}}
+    return {
+        "executor": None,
+        "intent": "other",
+        "matched": False,
+        "backend": backend,
     }
-    result: dict[str, Any] = {
-        "executor": "robot dog" if scene != "other" else None,
-        "intent": public_names.get(scene, scene),
-    }
-    if scene == "patrol":
-        result["area"] = _normalize_area(argument)
-    elif scene == "movement":
-        result["direction"] = argument
-    elif scene in {"find_object", "grab"}:
-        result["object"] = argument
-    result["matched"] = scene != "other"
-    result["backend"] = backend
-    return result
+
+
+def _discovery_skills(intent: dict[str, Any]) -> list[str]:
+    intent_type = str(intent.get("type") or "").upper()
+    if intent_type in {"TASK", "VIDEO_TASK"}:
+        return ["patrol", "camera"]
+    if intent_type == "OBJECT_RECOGNITION":
+        return ["camera"]
+    return []
 
 
 def _normalize_area(argument: str) -> str:
@@ -204,14 +255,68 @@ def _normalize_area(argument: str) -> str:
     return normalized
 
 
+async def _serve_dual_listeners(settings: AsrSettings) -> None:
+    """Serve discovery and runtime APIs with one shared Whisper model."""
+    discovery_settings = replace(
+        settings,
+        host=os.getenv("ASR_DISCOVERY_HOST", settings.host).strip() or settings.host,
+        port=_listener_port("ASR_DISCOVERY_PORT", settings.port),
+        intent_profile="discovery",
+    )
+    runtime_settings = replace(
+        settings,
+        host=os.getenv("ASR_RUNTIME_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        port=_listener_port("ASR_RUNTIME_PORT", 9005),
+        intent_profile="runtime",
+    )
+    recognizer = SpeechRecognizer(runtime_settings)
+    runners = [
+        web.AppRunner(create_app(discovery_settings, recognizer)),
+        web.AppRunner(create_app(runtime_settings, recognizer)),
+    ]
+    try:
+        for runner in runners:
+            await runner.setup()
+        await asyncio.gather(
+            web.TCPSite(
+                runners[0], discovery_settings.host, discovery_settings.port
+            ).start(),
+            web.TCPSite(
+                runners[1], runtime_settings.host, runtime_settings.port
+            ).start(),
+        )
+        LOGGER.info(
+            "ASR dual listeners ready discovery=http://%s:%s runtime=http://%s:%s",
+            discovery_settings.host,
+            discovery_settings.port,
+            runtime_settings.host,
+            runtime_settings.port,
+        )
+        stopped = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for signal_name in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(signal_name, stopped.set)
+            except (NotImplementedError, RuntimeError):
+                pass
+        await stopped.wait()
+    finally:
+        await asyncio.gather(*(runner.cleanup() for runner in runners))
+
+
+def _listener_port(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
 def main() -> None:
     configure_logging("asr")
     defaults = AsrSettings.from_env()
-    parser = argparse.ArgumentParser(description="Sandbox ASR service")
-    parser.add_argument("--host", default=defaults.host)
-    parser.add_argument("--port", type=int, default=defaults.port)
-    args = parser.parse_args()
-    web.run_app(create_app(defaults), host=args.host, port=args.port)
+    parser = argparse.ArgumentParser(description="Sandbox dual-listener ASR service")
+    parser.parse_args()
+    asyncio.run(_serve_dual_listeners(defaults))
 
 
 if __name__ == "__main__":
