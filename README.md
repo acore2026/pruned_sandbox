@@ -1,8 +1,8 @@
 # Sandbox Lite
 
-## 快速开始
+## 1. 快速开始
 
-### 1. 准备配置
+### 1.1 准备配置
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -13,7 +13,7 @@ tailscale ip -4
 将`sandbox.env`中的`VIDEO_PUBLIC_IP`改为本机联调地址；使用Tailscale时可通过
 `tailscale ip -4`查询。
 
-### 2. 使用容器启动（推荐）
+### 1.2 使用容器启动（推荐）
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -31,7 +31,7 @@ cd /home/aicor/pruned_sandbox
 docker compose --env-file sandbox.env up -d
 ```
 
-### 3. 查看状态和日志
+### 1.3 查看状态和日志
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -46,7 +46,7 @@ cd /home/aicor/pruned_sandbox
 tail -f logs/asr.log logs/intent.log logs/sandbox.log
 ```
 
-### 4. 检查接口
+### 1.4 检查接口
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -57,7 +57,7 @@ docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:9005/health
 docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
 ```
 
-### 5. 测试语音识别
+### 1.5 测试语音识别
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -89,7 +89,7 @@ curl --proxy http://127.0.0.1:7899 --fail --silent --show-error \
 {"request_id":"asr-generated-en-002","text":"Please patrol area B and locate the red doll.","intent":{"type":"UNKNOWN","parameters":{}},"required_skills":[]}
 ```
 
-#### Enter 全流程测试
+### 1.6 Enter 全流程测试
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -102,14 +102,14 @@ cd /home/aicor/pruned_sandbox
 最后解除绑定。第 5 步启动机器狗视频后等待 10～15 秒，让 YOLO 产生检测框；输出保存到
 `artifacts/robotdog-annotated.mp4`（640×480）。
 
-停止容器：
+### 1.7 停止容器
 
 ```bash
 cd /home/aicor/pruned_sandbox
 docker compose --env-file sandbox.env down
 ```
 
-### 本地运行（不使用容器）
+### 1.8 本地运行（不使用容器）
 
 首次准备虚拟环境：
 
@@ -134,7 +134,7 @@ cd /home/aicor/pruned_sandbox
 ./scripts/run_local.sh
 ```
 
-## 运行架构
+## 2. 运行架构
 
 服务端口：
 
@@ -178,7 +178,7 @@ Intent是Sandbox内部推理能力；
 `9005`及`8011`仅供容器内部调用。管理路径不会注册到用户面端口，用户路径也不会注册到
 管理面端口。
 
-## 算网标准接口
+## 3. 算网标准接口
 
 CMF管理面（`28501`）：
 
@@ -203,7 +203,7 @@ Sandbox不向机器狗发送控制指令。旧的`POST /v1/control-actions`与
 `GET /v1/control-actions/{action_id}`保留路由但固定返回`410 Gone`，避免旧调用方误认为
 Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持续识别目标。
 
-## 模型
+## 4. 模型
 
 容器启动时从当前仓库`models`目录只读挂载权重，不在线下载，也不将权重写入镜像层：
 
@@ -217,7 +217,7 @@ Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持�
 `bash scripts/check_model_sources.sh`
 可检查它们是否完整。
 
-## 运行配置说明
+## 5. 运行配置说明
 
 容器使用宿主机网络，上下游通过`VIDEO_PUBLIC_IP`访问`28501`、`28502`和`9004`。
 容器需要Docker Compose、NVIDIA Container Toolkit及可用GPU。默认基础镜像为
@@ -231,7 +231,7 @@ Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持�
 本地轻量模式关闭ASR和YOLO推理，并使用规则意图分类，适合接口Mock；真实模型模式
 会从当前仓库`models/`目录加载Whisper和Qwen。具体命令见顶部“快速开始”。
 
-## ASR
+## 6. ASR
 
 ASR是独立辅助服务，不属于十个Sandbox标准接口。对外接口为`POST /api/v1/transcribe`，
 使用`multipart/form-data`提交`file`、`request_id`和可选`language`：
@@ -263,7 +263,7 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 `ASR_DISCOVERY_HOST`、`ASR_DISCOVERY_PORT`、`ASR_RUNTIME_HOST`和`ASR_RUNTIME_PORT`配置监听地址。详细交接契约见
 `AR眼镜语音识别与意图接口定义.md`。
 
-## 意图分类
+## 7. 意图分类
 
 接口：
 
@@ -285,7 +285,7 @@ curl http://127.0.0.1:8011/api/v1/intent \
 响应中的`executor`是可直接用于 Agent Discovery `required_skills`的 skill；当前机器狗
 相关意图返回`robot dog`，未命中`other`时返回`null`。
 
-## Orange兼容WebRTC接口
+## 8. Orange兼容WebRTC接口
 
 以下旧接口暂时保留用于已有Orange联调；新算网流程应使用上述
 `/v1/media-connections`，不再依赖旧的服务端producer Offer流程。
@@ -317,7 +317,7 @@ Offer 是 Video Server 对手机发起的视频协商，但通过手机主动发
 创建进程内 WebRTC/YOLO 管线。这个本地状态用于关联上下行媒体，不表示服务
 创建或管理了核心网卸载会话。
 
-### Orange 媒体接口
+### 8.1 Orange 媒体接口
 
 | 方法 | 路径 | 鉴权 | 功能 |
 | --- | --- | --- | --- |
@@ -400,7 +400,7 @@ Content-Type: application/json
 响应状态为 `SOURCE_PENDING` 并持续输出占位帧；YOLO 首帧就绪后在同一个远端
 Track 内切换，不重新协商。
 
-### H.264 与 MTU
+### 8.2 H.264 与 MTU
 
 - B→Server 只协商 H.264 High/Constrained High（`64001f`/`640c1f`，
   `packetization-mode=1`），并校验 Answer，禁止静默回退。
@@ -414,7 +414,7 @@ Track 内切换，不重新协商。
 处理流固定为横屏 `640x480@30fps`。上游必须发送这个分辨率，服务不会自动缩放或
 letterbox；YOLO 也以 `640x480`（宽×高）进行推理，输出视频保持相同分辨率。
 
-### YOLO 扩展接口
+### 8.3 YOLO 扩展接口
 
 - `GET /api/v1/detection/classes`：查询当前检测目标。
 - `POST /api/v1/detection/classes`：动态设置检测目标。
@@ -430,7 +430,7 @@ curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
 默认且仅使用原通用 `yolov8s-worldv2.pt`。YOLO 模型进程内只加载一次，
 每个核心网 session ID 使用独立帧管线，多个观看端不会重复推理。
 
-## 测试
+## 9. 测试
 
 ```bash
 cd /home/aicor/pruned_sandbox
