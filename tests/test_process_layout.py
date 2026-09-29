@@ -54,4 +54,4 @@ class ProcessLayoutTest(TestCase):
         self.assertNotIn("UPF_N6_IP", compose)
         self.assertIn("EXPOSE 9004 28501 28502", dockerfile)
         self.assertNotIn("EXPOSE 9004 9005", dockerfile)
-        self.assertIn("127.0.0.1:9005/health", dockerfile)
+        self.assertNotIn("HEALTHCHECK", dockerfile)

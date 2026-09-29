@@ -19,43 +19,85 @@ DEFAULT_INTENTS = {
     "movement",
     "other",
 }
-DEFENSE_KEYWORDS = ("威吓", "驱逐")
-VIDEO_TASK_KEYWORDS = ("实时画面", "查看现场")
-OBJECT_RECOGNITION_KEYWORDS = ("可疑物识别", "识别可疑物")
+DEFENSE_KEYWORDS = (
+    "threaten",
+    "deter",
+    "expel",
+    "drive away",
+    # Legacy aliases are kept for existing callers; English is the canonical input language.
+    "威吓",
+    "驱逐",
+)
+VIDEO_TASK_KEYWORDS = (
+    "live video",
+    "real-time video",
+    "realtime video",
+    "view the scene",
+    "view the site",
+    "view live",
+    "实时画面",
+    "查看现场",
+)
+OBJECT_RECOGNITION_KEYWORDS = (
+    "suspicious object recognition",
+    "recognize suspicious objects",
+    "identify suspicious objects",
+    "detect suspicious objects",
+    "可疑物识别",
+    "识别可疑物",
+)
 MOVEMENT_COMMANDS = {
-    "向前": "forward",
-    "向前走": "forward",
-    "请向前走": "forward",
-    "往前走": "forward",
-    "前进": "forward",
     "move forward": "forward",
+    "go forward": "forward",
+    "step forward": "forward",
     "forward": "forward",
-    "退后": "backward",
-    "向后": "backward",
-    "向后走": "backward",
-    "请向后走": "backward",
-    "往后退": "backward",
-    "后退": "backward",
     "move back": "backward",
+    "move backward": "backward",
+    "go back": "backward",
+    "go backward": "backward",
+    "step back": "backward",
     "back": "backward",
     "backward": "backward",
-    "向左": "left",
-    "左转": "left",
-    "向左转": "left",
+    "move left": "left",
+    "go left": "left",
     "turn left": "left",
     "left": "left",
-    "向右": "right",
-    "右转": "right",
-    "向右转": "right",
+    "move right": "right",
+    "go right": "right",
     "turn right": "right",
     "right": "right",
+    "wave hello": "wave",
+    "say hello": "wave",
+    "hello": "wave",
+    "wave": "wave",
+    # Legacy aliases are kept for existing callers; English is the canonical input language.
+    "向前": "forward",
+    "向前走": "forward",
+    "前进": "forward",
+    "退后": "backward",
+    "向后": "backward",
+    "后退": "backward",
+    "向左": "left",
+    "左转": "left",
+    "向右": "right",
+    "右转": "right",
     "挥手": "wave",
     "打招呼": "wave",
     "你好": "wave",
-    "hello": "wave",
-    "wave": "wave",
 }
 FIND_PREFIXES = (
+    "please look for",
+    "please identify",
+    "please locate",
+    "please search for",
+    "please find the",
+    "please find",
+    "look for",
+    "identify",
+    "locate",
+    "search for",
+    "find the",
+    "find",
     "请帮我寻找",
     "请帮我找",
     "帮我寻找",
@@ -65,13 +107,14 @@ FIND_PREFIXES = (
     "寻找",
     "识别",
     "找",
-    "look for",
-    "identify",
-    "locate",
-    "find the",
-    "find",
 )
 GRAB_PREFIXES = (
+    "please pick up",
+    "please grasp",
+    "please grab",
+    "pick up",
+    "grasp",
+    "grab",
     "请帮我抓取",
     "帮我抓取",
     "请抓取",
@@ -87,12 +130,24 @@ GRAB_PREFIXES = (
     "请抓",
     "帮我抓",
     "抓",
-    "please pick up",
-    "please grasp",
-    "please grab",
-    "pick up",
-    "grasp",
-    "grab",
+)
+PATROL_KEYWORDS = (
+    "patrol",
+    "inspect",
+    "inspection",
+)
+PATROL_AREA_PATTERN = re.compile(r"\b(?:area|zone)\s+([a-z0-9]+)\b", re.IGNORECASE)
+LEGACY_PATROL_AREA_PATTERN = re.compile(r"([A-Za-z0-9一二三四五六七八九十]+区域)")
+WORD_BOUNDARY_DEFENSE_PATTERN = re.compile(
+    r"\b(?:threaten|deter|expel)\b|\bdrive\s+away\b", re.IGNORECASE
+)
+WORD_BOUNDARY_KEYWORD_PATTERN = re.compile(
+    r"\b(?:live\s+video|real[- ]?time\s+video|view\s+(?:the\s+)?(?:scene|site|live))\b",
+    re.IGNORECASE,
+)
+OBJECT_RECOGNITION_PATTERN = re.compile(
+    r"\b(?:suspicious\s+object\s+recognition|(?:recognize|identify|detect)\s+suspicious\s+objects?)\b",
+    re.IGNORECASE,
 )
 ZH_TO_EN = {
     "黄色": "yellow",
@@ -185,22 +240,33 @@ class RuleIntentClassifier:
 
     @staticmethod
     def _patrol(text: str) -> str | None:
-        if "巡逻" not in text and "巡检" not in text:
+        lowered = text.lower()
+        if any(keyword in text for keyword in ("巡逻", "巡检")):
+            match = LEGACY_PATROL_AREA_PATTERN.search(text)
+            return match.group(1) if match else ""
+        if not any(
+            re.search(rf"\b{re.escape(keyword)}\b", lowered)
+            for keyword in PATROL_KEYWORDS
+        ):
             return None
-        match = re.search(r"([A-Za-z0-9一二三四五六七八九十]+区域)", text)
-        return match.group(1) if match else ""
+        match = PATROL_AREA_PATTERN.search(lowered)
+        return match.group(1).upper() if match else ""
 
     @staticmethod
     def _defense(text: str) -> bool:
-        return any(keyword in text for keyword in DEFENSE_KEYWORDS)
+        return WORD_BOUNDARY_DEFENSE_PATTERN.search(text) is not None or any(
+            keyword in text for keyword in ("威吓", "驱逐")
+        )
 
     @staticmethod
     def _video_task(text: str) -> bool:
-        return any(keyword in text for keyword in VIDEO_TASK_KEYWORDS)
+        return WORD_BOUNDARY_KEYWORD_PATTERN.search(text) is not None or any(
+            keyword in text for keyword in ("实时画面", "查看现场")
+        )
 
     @staticmethod
     def _object_recognition(text: str) -> bool:
-        return any(keyword in text for keyword in OBJECT_RECOGNITION_KEYWORDS) or (
+        return OBJECT_RECOGNITION_PATTERN.search(text) is not None or (
             "可疑物" in text and "识别" in text
         )
 
@@ -277,7 +343,8 @@ class QwenIntentClassifier:
             "This is a campus patrol scenario using smart glasses and a robot dog. Classify only "
             f"the request into one of {list(self.settings.candidates)}. Return JSON only "
             "with keys intent and argument. Movement argument must be forward, backward, left, "
-            "right, or wave. Examples: 向前=forward, 退后=backward, 向左=left, 向右=right. "
+            "right, or wave. Examples: move forward=forward, move backward=backward, "
+            "turn left=left, turn right=right. "
             "A request to start a campus patrol or inspection must be patrol; its argument is "
             "the requested area. Requests for a live view or to view the site must be video_task. "
             "Requests for suspicious-object recognition must be object_recognition. Commands to "
@@ -319,10 +386,8 @@ class IntentService:
     async def classify(self, text: str) -> dict[str, Any]:
         normalized = " ".join(str(text or "").strip().split())
         rule_result = self.rules.classify(normalized)
-        if (
-            self.settings.backend == "rules"
-            or rule_result.intent
-            in {"patrol", "video_task", "object_recognition", "defense", "movement"}
+        if self.settings.backend == "rules" or (
+            rule_result.intent in self.settings.candidates and rule_result.intent != "other"
         ):
             if rule_result.intent not in self.settings.candidates:
                 rule_result = IntentResult("other", "", 1.0, self.rules.name)

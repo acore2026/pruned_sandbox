@@ -135,7 +135,7 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         self.assertEqual(
             {
                 "executor": "robot dog",
-                "intent": "movement",
+                "type": "movement",
                 "direction": "forward",
                 "matched": True,
                 "backend": "rules",
@@ -194,7 +194,7 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         self.assertEqual(
             {
                 "executor": None,
-                "intent": "other",
+                "type": "other",
                 "matched": False,
                 "backend": "rules",
             },

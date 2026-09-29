@@ -224,7 +224,7 @@ def _public_intent(
             direction = "forward"
         return {
             "executor": "robot dog",
-            "intent": "movement",
+            "type": "movement",
             "direction": direction,
             "matched": True,
             "backend": backend,
@@ -233,7 +233,7 @@ def _public_intent(
         return {"type": "UNKNOWN", "parameters": {}}
     return {
         "executor": None,
-        "intent": "other",
+        "type": "other",
         "matched": False,
         "backend": backend,
     }

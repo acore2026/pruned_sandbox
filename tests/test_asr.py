@@ -80,7 +80,7 @@ class SpeechRecognizerTest(IsolatedAsyncioTestCase):
         self.assertEqual(
             {
                 "executor": "robot dog",
-                "intent": "movement",
+                "type": "movement",
                 "direction": "forward",
                 "matched": True,
                 "backend": "rules",

@@ -53,7 +53,7 @@ class SeparateServiceApiTest(IsolatedAsyncioTestCase):
     async def test_intent_service_keeps_old_semantic_route_contract(self) -> None:
         response = await self.intent.post(
             "/api/v1/semantic/route",
-            json={"intent_payload": "帮我找黄色的狗"},
+            json={"intent_payload": "Please find the yellow dog"},
         )
         payload = await response.json()
 

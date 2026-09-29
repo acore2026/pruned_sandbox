@@ -67,13 +67,5 @@ RUN useradd --create-home --uid 10001 sandbox \
     && chmod 0755 /app/deploy/entrypoint.sh
 
 EXPOSE 9004 28501 28502
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-    CMD curl --noproxy '*' -fsS http://127.0.0.1:9004/health >/dev/null \
-        && curl --noproxy '*' -fsS http://127.0.0.1:9005/health >/dev/null \
-        && curl --noproxy '*' -fsS http://127.0.0.1:8011/health >/dev/null \
-        && curl --noproxy '*' -fsS http://127.0.0.1:28501/healthz >/dev/null \
-        && curl --noproxy '*' -fsS http://127.0.0.1:28502/healthz >/dev/null \
-        || exit 1
-
 ENTRYPOINT ["/app/deploy/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/sandbox.conf"]

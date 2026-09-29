@@ -5,7 +5,7 @@
 ### 1. 准备配置
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 test -f sandbox.env || cp sandbox.env.example sandbox.env
 tailscale ip -4
 ```
@@ -16,7 +16,7 @@ tailscale ip -4
 ### 2. 使用容器启动（推荐）
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 set -a
 . ./sandbox.env
 set +a
@@ -27,14 +27,14 @@ docker compose --env-file sandbox.env up -d --build
 首次构建完成后，再次启动可省略`--build`：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 docker compose --env-file sandbox.env up -d
 ```
 
 ### 3. 查看状态和日志
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 docker compose --env-file sandbox.env ps
 docker compose --env-file sandbox.env logs -f sandbox
 ```
@@ -42,14 +42,14 @@ docker compose --env-file sandbox.env logs -f sandbox
 宿主机滚动日志：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 tail -f logs/asr.log logs/intent.log logs/sandbox.log
 ```
 
 ### 4. 检查接口
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 curl --noproxy '*' http://127.0.0.1:28501/healthz
 curl --noproxy '*' http://127.0.0.1:28502/healthz
 curl --noproxy '*' http://127.0.0.1:9004/health
@@ -60,17 +60,33 @@ docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
 ### 5. 测试语音识别
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
-  -F file=@test_audio/patrol-area-a.mp3 \
+  -F file=@test_audio/generated-asr-en.mp3 \
   -F request_id=asr-001 \
-  -F language=zh
+  -F language=en
+```
+
+生成英文测试音频（通过本机 7899 代理）：
+
+```bash
+curl --proxy http://127.0.0.1:7899 --fail --silent --show-error \
+  --output test_audio/generated-asr-en.mp3 \
+  'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=Please%20patrol%20area%20B%20and%20locate%20the%20red%20doll.'
+```
+
+预期转写文本为 `Please patrol area B and locate the red doll.`。
+
+实际返回：
+
+```json
+{"request_id":"asr-generated-en-002","text":"Please patrol area B and locate the red doll.","intent":{"type":"UNKNOWN","parameters":{}},"required_skills":[]}
 ```
 
 停止容器：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 docker compose --env-file sandbox.env down
 ```
 
@@ -79,7 +95,7 @@ docker compose --env-file sandbox.env down
 首次准备虚拟环境：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -r requirements.txt
@@ -88,14 +104,14 @@ python3 -m venv .venv
 使用真实模型启动：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 SANDBOX_REAL_MODELS=true ./scripts/run_local.sh
 ```
 
 按`Ctrl-C`统一停止服务。无GPU的Mock模式执行：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 ./scripts/run_local.sh
 ```
 
@@ -112,10 +128,11 @@ cd /home/aicore/pruned_sandbox
 | `http://127.0.0.1:8011` | Intent内部服务 |
 
 容器在运行期以只读方式挂载宿主机的Whisper、Qwen和YOLO权重；模型不复制进镜像。默认目录如下：
+容器内 ASR 保持 `/models/asr/whisper-large-v3` 这一稳定挂载点，实际内容来自宿主机的 `small.en` 目录。
 
 ```text
-/home/aicore/pruned_sandbox/models/
-├── whisper-models/whisper-large-v3/model.bin
+/home/aicor/pruned_sandbox/models/
+├── whisper-models/small.en/model.bin
 ├── semantic-models/Qwen/Qwen2.5-0.5B-Instruct/model.safetensors
 └── yolo-models/yolov8s-worldv2.pt
 ```
@@ -171,7 +188,7 @@ Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持�
 
 容器启动时从当前仓库`models`目录只读挂载权重，不在线下载，也不将权重写入镜像层：
 
-- `whisper-large-v3`
+- `small.en`
 - `Qwen2.5-0.5B-Instruct`
 - `yolov8s-worldv2.pt`
 
@@ -199,11 +216,11 @@ ASR是独立辅助服务，不属于十个Sandbox标准接口。对外接口为`
 使用`multipart/form-data`提交`file`、`request_id`和可选`language`：
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
-  -F file=@speech.wav \
+  -F file=@test_audio/generated-asr-en.mp3 \
   -F request_id=asr-001 \
-  -F language=zh
+  -F language=en
 ```
 
 响应只包含`request_id`、`text`和`intent`；任务发现实例额外返回`required_skills`。
@@ -211,7 +228,7 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 严格按场景文档映射“巡逻、巡检”为`TASK`和`["patrol", "camera"]`，“实时画面、
 查看现场”为`VIDEO_TASK`和相同技能，“可疑物识别”为`OBJECT_RECOGNITION`和
 `["camera"]`。仅本机可访问的`9005`为`runtime`，用于已建立算力会话后的Sandbox；“威吓歹徒”和“驱逐歹徒”
-均返回`executor=robot dog`、`intent=movement`、`direction=forward`。任意音频都返回
+均返回`executor=robot dog`、`type=movement`、`direction=forward`。任意音频都返回
 转写文本；任务发现未命中时为`intent.type=UNKNOWN`，运行期未命中时为
 `intent.matched=false`。
 
@@ -219,7 +236,7 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 `computing_context`后调用本机`9005`，返回文本和运行期动作意图，不创建动作任务，也不控制机器狗。
 
 支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载
-`whisper-large-v3`，使用 CUDA `float16`。可通过`ASR_INITIAL_PROMPT`、`ASR_HOTWORDS`、
+`small.en`，使用 CUDA `float16`。可通过`ASR_INITIAL_PROMPT`、`ASR_HOTWORDS`、
 `ASR_DISCOVERY_HOST`、`ASR_DISCOVERY_PORT`、`ASR_RUNTIME_HOST`和`ASR_RUNTIME_PORT`配置监听地址。详细交接契约见
 `AR眼镜语音识别与意图接口定义.md`。
 
@@ -232,7 +249,7 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 - `POST /api/v1/semantic/route`（兼容原入口）
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 curl http://127.0.0.1:8011/api/v1/intent \
   -H 'Content-Type: application/json' \
   -d '{"text":"帮我找黄色的狗"}'
@@ -381,7 +398,7 @@ Track 内切换，不重新协商。
 - `GET /health`、`GET /api/health`：YOLO 和帧处理详细状态。
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
   -H 'Content-Type: application/json' \
   -d '{"classes":["person","dog"]}'
@@ -393,7 +410,7 @@ curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
 ## 测试
 
 ```bash
-cd /home/aicore/pruned_sandbox
+cd /home/aicor/pruned_sandbox
 .venv/bin/python -m unittest discover -s tests -v
 ```
 

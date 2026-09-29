@@ -52,7 +52,7 @@ Content-Type: multipart/form-data
 
 该接口用于Sandbox尚未拉起时的首条巡逻任务语音，例如：
 
-> 派机器狗巡逻园区内A区域
+> Send the robot dog to patrol area A on campus.
 
 服务返回识别文本、巡逻任务意图和发现机器狗所需的技能。眼镜端随后将`text`作为任务描述、将`required_skills`原样传给H-DISCOVERY。
 
@@ -71,7 +71,7 @@ Content-Type: multipart/form-data
 ```json
 {
   "request_id": "asr-001",
-  "text": "派机器狗巡逻园区内A区域",
+  "text": "Send the robot dog to patrol area A on campus.",
   "intent": {
     "type": "TASK",
     "parameters": {
@@ -102,7 +102,7 @@ Content-Type: multipart/form-data
 ```json
 {
   "request_id": "asr-video-001",
-  "text": "查看机器狗实时画面。",
+  "text": "Show me the robot dog's live video.",
   "intent": {
     "type": "VIDEO_TASK",
     "parameters": {}
@@ -119,7 +119,7 @@ Content-Type: multipart/form-data
 ```json
 {
   "request_id": "asr-object-001",
-  "text": "识别园区内可疑物。",
+  "text": "Identify suspicious objects in the campus.",
   "intent": {
     "type": "OBJECT_RECOGNITION",
     "parameters": {}
@@ -137,7 +137,7 @@ Content-Type: multipart/form-data
 ```json
 {
   "request_id": "asr-002",
-  "text": "今天是周五。",
+  "text": "Today is Friday.",
   "intent": {
     "type": "UNKNOWN",
     "parameters": {}
@@ -158,17 +158,42 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 
 ### 5.2 动作意图响应示例
 
-“威吓歹徒”和“驱逐歹徒”在当前场景中均归一化为向前移动意图。按场景文档第10.2节，
-`executor`、`intent`、`direction`、`matched`和`backend`均需保留。具体的`Scrape`或
-`FrontPounce`由AR应用根据业务确认结果填入后续群组A2A `TASK`，不由Sandbox决定。
+当前先保留一个“驱逐歹徒”的消息示例。语音内容统一使用英文；`direction` 暂时使用
+`expel`，后续再由映射表转换为具体设备动作。`executor`、`type`、`direction`、
+`matched`和`backend`均需保留。
 
 ```json
 {
   "request_id": "asr-action-001",
-  "text": "威吓歹徒。",
+  "text": "Expel the suspect.",
   "intent": {
     "executor": "robot dog",
-    "intent": "movement",
+    "type": "movement",
+    "direction": "expel",
+    "matched": true,
+    "backend": "qwen"
+  }
+}
+```
+
+普通移动语音按以下方向返回 `movement` 意图；语音内容仍使用英文：
+
+| 语音示例 | `intent.type` | `intent.direction` |
+| --- | --- | --- |
+| `Move forward.` | `movement` | `forward` |
+| `Move backward.` | `movement` | `backward` |
+| `Turn left.` | `movement` | `left` |
+| `Turn right.` | `movement` | `right` |
+
+向前：
+
+```json
+{
+  "request_id": "asr-action-002",
+  "text": "Move forward.",
+  "intent": {
+    "executor": "robot dog",
+    "type": "movement",
     "direction": "forward",
     "matched": true,
     "backend": "qwen"
@@ -176,16 +201,48 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 }
 ```
 
-“驱逐歹徒”使用相同的结构：
+退后：
 
 ```json
 {
-  "request_id": "asr-action-002",
-  "text": "驱逐歹徒。",
+  "request_id": "asr-action-003",
+  "text": "Move backward.",
   "intent": {
     "executor": "robot dog",
-    "intent": "movement",
-    "direction": "forward",
+    "type": "movement",
+    "direction": "backward",
+    "matched": true,
+    "backend": "qwen"
+  }
+}
+```
+
+向左：
+
+```json
+{
+  "request_id": "asr-action-004",
+  "text": "Turn left.",
+  "intent": {
+    "executor": "robot dog",
+    "type": "movement",
+    "direction": "left",
+    "matched": true,
+    "backend": "qwen"
+  }
+}
+```
+
+向右：
+
+```json
+{
+  "request_id": "asr-action-005",
+  "text": "Turn right.",
+  "intent": {
+    "executor": "robot dog",
+    "type": "movement",
+    "direction": "right",
     "matched": true,
     "backend": "qwen"
   }
@@ -193,24 +250,24 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 ```
 
 动作意图与机器狗设备命令的映射由眼镜端或机器狗业务适配器维护。Sandbox只返回
-`movement/direction=forward`，不区分、映射或下发任何具体设备动作。
+结构化意图，不区分、映射或下发任何具体设备动作。
 
 ### 5.4 未匹配动作意图
 
 ```json
 {
-  "request_id": "asr-action-003",
-  "text": "今天是周五。",
+  "request_id": "asr-action-006",
+  "text": "Today is Friday.",
   "intent": {
     "executor": null,
-    "intent": "other",
+    "type": "other",
     "matched": false,
     "backend": "qwen"
   }
 }
 ```
 
-眼镜端应始终显示`text`；只有`intent.matched=true`且意图在本地允许列表内时，才进入后续A2A业务流程。
+眼镜端应始终显示`text`；只有`intent.matched=true`且`intent.type`在本地允许列表内时，才进入后续A2A业务流程。
 
 ## 6. 意图字段约定
 
@@ -221,8 +278,8 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 | 独立ASR任务发现 | `type` | `TASK`、`VIDEO_TASK`或`OBJECT_RECOGNITION`；未命中时为`UNKNOWN` |
 | 独立ASR任务发现 | `parameters.area` | `TASK`时的巡逻区域；未识别时为空对象或省略`area` |
 | 运行期动作 | `executor` | 命中时固定为`robot dog`；未命中时为`null` |
-| 运行期动作 | `intent` | 命中时为`movement`；未命中时为`other` |
-| 运行期动作 | `direction` | 命中时为`forward` |
+| 运行期动作 | `type` | 命中时为`movement`；未命中时为`other` |
+| 运行期动作 | `direction` | 普通移动时为`forward`、`backward`、`left`或`right`；“驱逐歹徒”暂时为`expel` |
 | 运行期动作 | `matched` | 是否命中动作候选意图 |
 | 运行期动作 | `backend` | 实际意图识别后端，例如`qwen` |
 
@@ -279,7 +336,7 @@ curl --noproxy '*' -X POST \
 1. 眼镜端收到响应后立即显示`text`；
 2. 独立ASR任务仅在`intent.type`为`TASK`、`VIDEO_TASK`或`OBJECT_RECOGNITION`且`required_skills`非空时发起H-DISCOVERY；
 3. `TASK`和`VIDEO_TASK`使用`["patrol", "camera"]`发现机器狗；`OBJECT_RECOGNITION`使用`["camera"]`，并在组网后再申请算力识别服务；
-4. 运行期动作只有在`intent.matched=true`且`intent.intent=movement`时才构造A2A `TASK`；
+4. 运行期动作只有在`intent.matched=true`且`intent.type=movement`时才构造A2A `TASK`；
 5. 重试时沿用同一个`request_id`，新的一次用户录音使用新的`request_id`；
 6. Sandbox不会因为任何识别结果直接控制机器狗。
 
@@ -289,7 +346,7 @@ curl --noproxy '*' -X POST \
 
 - 删除运行期音频接口触发机器狗控制适配器的逻辑；
 - 在独立ASR模式实现第4.1节的三类映射：`TASK`/`VIDEO_TASK`返回`["patrol", "camera"]`，`OBJECT_RECOGNITION`返回`["camera"]`；
-- 将“威吓歹徒”和“驱逐歹徒”返回为`executor=robot dog`、`intent=movement`、`direction=forward`、`matched=true`和`backend=qwen`；
+- 将普通移动返回为`executor=robot dog`、`type=movement`、`direction=forward`/`backward`/`left`/`right`；“驱逐歹徒”暂时返回`direction=expel`，后续再接入动作映射表；
 - 按第4、5节分别返回任务和动作意图未命中结构，同时始终返回转写文本；
 - 停止向眼镜端返回`control_triggered`等控制执行状态字段。
 - 将当前`session_id`、`task_id`等内部关联字段收敛为对外唯一的`request_id`。
