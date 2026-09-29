@@ -430,22 +430,7 @@ cd /home/aicor/pruned_sandbox
 
 ## Enter 分步端到端演示
 
-`scripts/e2e_upstream_demo.py` 用本地文件模拟上游、机器狗和眼镜：巡逻语音发送到
-`9004`，随后创建 `28501` 测试绑定；预处理后的 `robotdog2-640x480.mp4` 作为机器狗视频源通过 WebRTC
-发送到 `28502`，脚本接收带 YOLO 检测框的 640×480 处理流并保存到
-`artifacts/robotdog-annotated.mp4`。之后每次按 Enter 发送一条眼镜语音到
-`28502 /v1/audio-control-actions`，脚本打印 ASR 意图和模拟的机器狗指令。
-
-如果更换机器狗视频，先离线处理成服务约定的固定分辨率（不会由服务自动缩放）：
-
-```bash
-cd /home/aicor/pruned_sandbox
-ffmpeg -i robotdog2.MOV \
-  -vf 'scale=640:480:force_original_aspect_ratio=increase,crop=640:480' \
-  -an -c:v libx264 -pix_fmt yuv420p -r 30 robotdog2-640x480.mp4
-```
-
-先启动服务并加载环境变量：
+脚本模拟巡逻语音、机器狗视频、眼镜视频接收和语音控制。先启动服务：
 
 ```bash
 cd /home/aicor/pruned_sandbox
@@ -455,28 +440,25 @@ set +a
 docker compose --env-file sandbox.env up -d
 ```
 
-运行演示：
+运行全流程测试：
 
 ```bash
 cd /home/aicor/pruned_sandbox
-.venv/bin/python scripts/e2e_upstream_demo.py
-```
-
-默认使用以下文件：
-
-- 视频：`robotdog2-640x480.mp4`（由 `robotdog2.MOV` 预处理为固定横屏 640×480）
-- 巡逻语音：`test_audio/generated-asr-en.mp3`
-- 驱逐语音：`test_audio/deter-suspect.mp3`
-- 左移语音：`test_audio/turn-left.mp3`
-- 前后右移语音：`test_audio/move-forward.mp3`、`move-backward.mp3`、`turn-right.mp3`
-
-脚本的 Enter 等待不会暂停 WebRTC 和 YOLO 后台任务；视频会在等待下一步时持续处理。
-不存在的方向音频会被明确跳过，不会伪造识别结果。也可以显式传入已有音频：
-
-```bash
 .venv/bin/python scripts/e2e_upstream_demo.py \
+  --video robotdog2-640x480.mp4 \
   --direction-audio left=test_audio/turn-left.mp3
 ```
 
-脚本只模拟最后一步的狗控指令并打印 JSON；当前 Sandbox 的音频兼容接口只返回
-文字和意图，不会直接向机器狗发送控制动作。
+按 Enter 依次执行：
+
+1. 巡逻语音 → `9004`
+2. 创建 Sandbox 绑定 → `28501`
+3. 设置 YOLO 目标 `robot dog`
+4. 建立眼镜端 WebRTC 接收
+5. 建立机器狗端 WebRTC 发送
+6. 驱逐语音
+7. 左移语音
+8. 解除绑定并结束
+
+第 5 步后等待 10～15 秒，让 YOLO 处理视频并产生检测框。输出视频保存到
+`artifacts/robotdog-annotated.mp4`，固定为 640×480。脚本只模拟向机器狗下发的指令。
