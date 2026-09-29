@@ -20,11 +20,13 @@ from services.video.config import VideoSettings
 
 class FakeWhisperModel:
     transcript_text = "威吓歹徒"
+    last_language = "unset"
 
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 
     def transcribe(self, _path: str, **_kwargs):
+        FakeWhisperModel.last_language = _kwargs.get("language")
         return (
             iter([SimpleNamespace(start=0.0, end=1.0, text=self.transcript_text)]),
             SimpleNamespace(language="zh", language_probability=0.99, duration=1.0),
@@ -39,6 +41,7 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
             {
                 "ASR_ENABLED": "true",
                 "ASR_MODEL": "mock-whisper",
+                "ASR_LANGUAGE": "",
                 "ASR_INTENT_URL": "",
                 "YOLO_ENABLED": "false",
                 "SANDBOX_INTENT_URL": "",
@@ -120,7 +123,6 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         upload = FormData()
         upload.add_field("request_id", "audio-action-1")
         upload.add_field("computing_context", json.dumps(context))
-        upload.add_field("language", "zh")
         upload.add_field(
             "file",
             b"mock-wave-bytes",
@@ -132,11 +134,12 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
         self.assertEqual(200, response.status, action)
         self.assertEqual("audio-action-1", action["request_id"])
         self.assertEqual("威吓歹徒", action["text"])
+        self.assertIsNone(FakeWhisperModel.last_language)
         self.assertEqual(
             {
                 "executor": "robot dog",
                 "type": "movement",
-                "direction": "forward",
+                "direction": "expel",
                 "matched": True,
                 "backend": "rules",
             },

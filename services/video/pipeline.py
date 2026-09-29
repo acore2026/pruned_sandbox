@@ -118,6 +118,14 @@ class FramePipeline:
             self.received_frames += 1
             self.first_frame.set()
             image = frame.to_ndarray(format="bgr24")
+            expected_shape = (self.settings.video_height, self.settings.video_width)
+            if image.shape[:2] != expected_shape:
+                message = (
+                    "incoming video must be fixed 640x480 (width x height); "
+                    f"received {image.shape[1]}x{image.shape[0]}"
+                )
+                self.last_error = message
+                raise ValueError(message)
             if queue.full():
                 queue.get_nowait()
                 self.dropped_frames += 1
@@ -229,23 +237,16 @@ class FramePipeline:
         return canvas
 
     def _fit_output(self, image: np.ndarray) -> np.ndarray:
-        """Letterbox every processed frame to a stable WebRTC output size."""
+        """Validate the fixed WebRTC output size without resizing frames."""
         target_width = self.settings.video_width
         target_height = self.settings.video_height
         height, width = image.shape[:2]
-        scale = min(target_width / width, target_height / height)
-        resized_width = max(2, int(width * scale) // 2 * 2)
-        resized_height = max(2, int(height * scale) // 2 * 2)
-        resized = cv2.resize(
-            image,
-            (resized_width, resized_height),
-            interpolation=cv2.INTER_LINEAR,
-        )
-        output = np.zeros((target_height, target_width, 3), dtype=np.uint8)
-        left = (target_width - resized_width) // 2
-        top = (target_height - resized_height) // 2
-        output[top : top + resized_height, left : left + resized_width] = resized
-        return output
+        if (width, height) != (target_width, target_height):
+            raise ValueError(
+                "processed video must remain fixed at 640x480 (width x height); "
+                f"received {width}x{height}"
+            )
+        return image
 
 
 def _labels_match(prompt: str, label: str) -> bool:

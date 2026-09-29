@@ -33,7 +33,7 @@ Content-Type: multipart/form-data
 | --- | --- | --- | --- |
 | `file` | binary | 是 | 音频文件；建议使用`wav`、`mp3`或`m4a` |
 | `request_id` | string | 是 | 眼镜端生成的本次识别请求ID；用于响应关联、日志定位和安全重试 |
-| `language` | string | 否 | 语言代码，中文使用`zh` |
+| `language` | string | 否 | 语言代码，可使用`zh`或`en`；省略时由多语言模型自动检测 |
 
 ### 3.2 通用响应字段
 
@@ -327,9 +327,10 @@ curl --noproxy '*' -X POST \
   http://{sandbox_host}:28502/v1/audio-control-actions \
   -F file=@deter-suspect.mp3 \
   -F request_id=asr-action-001 \
-  -F language=zh \
   -F 'computing_context={"compute_service_session_id":"css-001","compute_instance_id":"ci-001","binding_ref":"binding-css-001","role":"consumer","agent_id":"glasses"}'
 ```
+
+运行期动作识别省略`language`时自动检测中文或英文；如需固定语言，传入`language=en`或`language=zh`。
 
 ## 9. 调用方处理规则
 

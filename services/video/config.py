@@ -18,6 +18,25 @@ def _int(name: str, default: int, minimum: int = 1) -> int:
         return default
 
 
+def _yolo_image_size() -> tuple[int, int]:
+    """Return the fixed YOLO image size as ``(height, width)``."""
+    raw = os.getenv("YOLO_IMAGE_SIZE", "640,480").strip().lower()
+    parts = [part.strip() for part in raw.replace("x", ",").split(",") if part.strip()]
+    try:
+        if len(parts) == 2:
+            width, height = (max(2, int(part)) for part in parts)
+            if (width, height) != (640, 480):
+                raise ValueError
+            return height, width
+        # Keep the old single-value setting readable, but enforce the
+        # service contract instead of silently choosing a square inference size.
+        if len(parts) == 1 and int(parts[0]) == 640:
+            return 480, 640
+    except ValueError:
+        pass
+    raise ValueError("YOLO_IMAGE_SIZE must be the fixed value 640,480")
+
+
 def _float(name: str, default: float, minimum: float = 0.0) -> float:
     try:
         return max(minimum, float(os.getenv(name, str(default))))
@@ -55,7 +74,7 @@ class VideoSettings:
     yolo_device: str
     yolo_confidence: float
     yolo_iou: float
-    yolo_image_size: int
+    yolo_image_size: tuple[int, int]
     yolo_classes: tuple[str, ...]
     video_width: int
     video_height: int
@@ -93,7 +112,7 @@ class VideoSettings:
             yolo_device=os.getenv("YOLO_DEVICE", "0").strip(),
             yolo_confidence=_float("YOLO_CONFIDENCE", 0.3),
             yolo_iou=_float("YOLO_IOU", 0.4),
-            yolo_image_size=_int("YOLO_IMAGE_SIZE", 640),
+            yolo_image_size=_yolo_image_size(),
             yolo_classes=_csv("YOLO_CLASSES"),
             video_width=_int("VIDEO_WIDTH", 640, minimum=2),
             video_height=_int("VIDEO_HEIGHT", 480, minimum=2),

@@ -81,7 +81,7 @@ class SpeechRecognizerTest(IsolatedAsyncioTestCase):
             {
                 "executor": "robot dog",
                 "type": "movement",
-                "direction": "forward",
+                "direction": "expel",
                 "matched": True,
                 "backend": "rules",
             },

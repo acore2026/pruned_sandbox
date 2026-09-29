@@ -219,8 +219,8 @@ def _public_intent(
     if profile == "discovery" and normalized_scene == "object_recognition":
         return {"type": "OBJECT_RECOGNITION", "parameters": {}}
     if profile == "runtime" and normalized_scene in {"defense", "movement"}:
-        direction = "forward" if normalized_scene == "defense" else str(argument).strip()
-        if direction not in {"forward", "backward", "left", "right", "wave"}:
+        direction = "expel" if normalized_scene == "defense" else str(argument).strip()
+        if direction not in {"forward", "backward", "left", "right", "wave", "expel"}:
             direction = "forward"
         return {
             "executor": "robot dog",

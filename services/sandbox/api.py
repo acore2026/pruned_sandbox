@@ -25,6 +25,14 @@ from .control import HttpProducerControlAdapter, ProducerControlAdapter
 
 LOGGER = logging.getLogger("sandbox.service")
 
+# The bundled YOLO-World vocabulary recognizes the spaced form more reliably
+# than the usual one-word spelling. Keep this normalization at the API edge so
+# callers can continue to say "lightsaber" while the detector receives the
+# model-friendly prompt.
+MODEL_PROMPT_ALIASES = {
+    "lightsaber": "light saber",
+}
+
 
 @dataclass(slots=True)
 class BindingRecord:
@@ -540,7 +548,7 @@ class SandboxApi:
             self.http = ClientSession(timeout=ClientTimeout(total=120))
         upload = FormData()
         upload.add_field("request_id", request_id)
-        upload.add_field("language", fields.get("language", "zh"))
+        upload.add_field("language", fields.get("language", ""))
         upload.add_field(
             "file",
             audio,
@@ -809,6 +817,7 @@ class SandboxApi:
         if isinstance(i18n, dict):
             label = str(i18n.get("zh") or label)
             prompt = str(i18n.get("en") or prompt)
+        prompt = MODEL_PROMPT_ALIASES.get(prompt.casefold(), prompt)
         return label, prompt
 
     async def _control_action(

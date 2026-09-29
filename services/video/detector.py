@@ -38,6 +38,7 @@ class YoloDetector:
                 factory = YOLO
             try:
                 self._model = factory(self.settings.yolo_model)
+                self._move_model_to_inference_device()
                 self._try_set_dynamic_classes(self._requested_classes)
             except Exception as exc:
                 self.last_error = str(exc)
@@ -45,6 +46,24 @@ class YoloDetector:
             self.loaded = True
             self.last_error = None
             return self._model
+
+    def _move_model_to_inference_device(self) -> None:
+        """Move YOLO-World before encoding dynamic CLIP classes.
+
+        ``set_classes`` creates and stores text embeddings.  If it runs while
+        the wrapper is still on CPU and the first ``predict`` later moves the
+        detector to CUDA, the cached text embeddings stay on CPU and inference
+        fails with a mixed-device tensor error.
+        """
+        device = str(self.settings.yolo_device or "").strip().lower()
+        if not device or device == "cpu":
+            return
+        mover = getattr(self._model, "to", None)
+        if not callable(mover):
+            return
+        if device.isdigit():
+            device = f"cuda:{device}"
+        mover(device)
 
     def _try_set_dynamic_classes(self, classes: list[str]) -> None:
         setter = getattr(self._model, "set_classes", None)
@@ -87,7 +106,9 @@ class YoloDetector:
                     "source": image,
                     "conf": self.settings.yolo_confidence,
                     "iou": self.settings.yolo_iou,
-                    "imgsz": self.settings.yolo_image_size,
+                    # Ultralytics expects (height, width); the service media
+                    # contract is fixed at 640x480 (width x height).
+                    "imgsz": list(self.settings.yolo_image_size),
                     "device": self.settings.yolo_device,
                     "verbose": False,
                 }
@@ -124,6 +145,8 @@ class YoloDetector:
         if boxes is None:
             return []
         names = getattr(result, "names", {})
+        if isinstance(names, list):
+            names = dict(enumerate(names))
         detections: list[dict[str, Any]] = []
         for box in boxes:
             class_id = int(box.cls[0].item())

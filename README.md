@@ -63,8 +63,14 @@ docker exec sandbox-lite curl --noproxy '*' -fsS http://127.0.0.1:8011/health
 cd /home/aicor/pruned_sandbox
 curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
   -F file=@test_audio/generated-asr-en.mp3 \
-  -F request_id=asr-001 \
-  -F language=en
+  -F request_id=asr-001
+```
+
+```bash
+cd /home/aicor/pruned_sandbox
+curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
+  -F file=@test_audio/turn-left.mp3 \
+  -F request_id=asr-001
 ```
 
 生成英文测试音频（通过本机 7899 代理）：
@@ -128,11 +134,11 @@ cd /home/aicor/pruned_sandbox
 | `http://127.0.0.1:8011` | Intent内部服务 |
 
 容器在运行期以只读方式挂载宿主机的Whisper、Qwen和YOLO权重；模型不复制进镜像。默认目录如下：
-容器内 ASR 保持 `/models/asr/whisper-large-v3` 这一稳定挂载点，实际内容来自宿主机的 `small.en` 目录。
+容器内 ASR 保持 `/models/asr/whisper-large-v3` 这一稳定挂载点，实际内容来自宿主机的多语言 `whisper-large-v3` 目录。
 
 ```text
 /home/aicor/pruned_sandbox/models/
-├── whisper-models/small.en/model.bin
+├── whisper-models/whisper-large-v3/model.bin
 ├── semantic-models/Qwen/Qwen2.5-0.5B-Instruct/model.safetensors
 └── yolo-models/yolov8s-worldv2.pt
 ```
@@ -188,12 +194,14 @@ Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持�
 
 容器启动时从当前仓库`models`目录只读挂载权重，不在线下载，也不将权重写入镜像层：
 
-- `small.en`
+- `whisper-large-v3`（支持中文和英文）
 - `Qwen2.5-0.5B-Instruct`
 - `yolov8s-worldv2.pt`
+- YOLO-World 的本地 CLIP 权重 `ViT-B-32.pt`（用于动态设置 `light saber` 等文本目标）
 
-默认模型源目录由`sandbox.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`
-和`YOLO_MODEL_SOURCE`配置。这三个目录是容器启动前的必要条件；`bash scripts/check_model_sources.sh`
+默认模型源目录由`sandbox.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`、
+`YOLO_MODEL_SOURCE`和`YOLO_CLIP_SOURCE`配置。这四个目录/文件是容器启动前的必要条件；
+`bash scripts/check_model_sources.sh`
 可检查它们是否完整。
 
 ## 运行配置说明
@@ -228,15 +236,17 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 严格按场景文档映射“巡逻、巡检”为`TASK`和`["patrol", "camera"]`，“实时画面、
 查看现场”为`VIDEO_TASK`和相同技能，“可疑物识别”为`OBJECT_RECOGNITION`和
 `["camera"]`。仅本机可访问的`9005`为`runtime`，用于已建立算力会话后的Sandbox；“威吓歹徒”和“驱逐歹徒”
-均返回`executor=robot dog`、`type=movement`、`direction=forward`。任意音频都返回
+均返回`executor=robot dog`、`type=movement`、`direction=expel`。任意音频都返回
 转写文本；任务发现未命中时为`intent.type=UNKNOWN`，运行期未命中时为
 `intent.matched=false`。
 
 `POST /v1/audio-control-actions`仅为已绑定会话保留兼容入口；它校验
 `computing_context`后调用本机`9005`，返回文本和运行期动作意图，不创建动作任务，也不控制机器狗。
+省略`language`时自动检测中文或英文；传入`language=en`或`language=zh`时分别强制使用英文或中文。
 
-支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载
-`small.en`，使用 CUDA `float16`。可通过`ASR_INITIAL_PROMPT`、`ASR_HOTWORDS`、
+支持 `wav/mp3/m4a/flac/ogg/webm`，默认最大 50 MiB。默认加载多语言
+`whisper-large-v3`，使用 CUDA `float16`。默认自动检测中文或英文，也可以通过请求中的
+`language=zh`或`language=en`指定语言。可通过`ASR_INITIAL_PROMPT`、`ASR_HOTWORDS`、
 `ASR_DISCOVERY_HOST`、`ASR_DISCOVERY_PORT`、`ASR_RUNTIME_HOST`和`ASR_RUNTIME_PORT`配置监听地址。详细交接契约见
 `AR眼镜语音识别与意图接口定义.md`。
 
@@ -388,8 +398,8 @@ Track 内切换，不重新协商。
   空间后的媒体 payload 上限。
 - 上下行连接都会在必要时主动请求关键帧，减少启动关键帧丢失导致的首帧等待。
 
-处理流默认固定为 `640x480@30fps`；不同尺寸的源帧会等比例缩放并 letterbox，
-占位帧切到 YOLO 帧时不会改变输出分辨率。
+处理流固定为横屏 `640x480@30fps`。上游必须发送这个分辨率，服务不会自动缩放或
+letterbox；YOLO 也以 `640x480`（宽×高）进行推理，输出视频保持相同分辨率。
 
 ### YOLO 扩展接口
 
@@ -417,3 +427,56 @@ cd /home/aicor/pruned_sandbox
 测试覆盖三个独立服务、原模型默认值、无会话管理接口，以及真实 aiortc
 端到端链路（消费端先建链、占位帧、H.264 High 源 Answer、YOLO 帧无重协商
 切换、RTP payload 限制和停止媒体）。
+
+## Enter 分步端到端演示
+
+`scripts/e2e_upstream_demo.py` 用本地文件模拟上游、机器狗和眼镜：巡逻语音发送到
+`9004`，随后创建 `28501` 测试绑定；预处理后的 `robotdog2-640x480.mp4` 作为机器狗视频源通过 WebRTC
+发送到 `28502`，脚本接收带 YOLO 检测框的 640×480 处理流并保存到
+`artifacts/robotdog-annotated.mp4`。之后每次按 Enter 发送一条眼镜语音到
+`28502 /v1/audio-control-actions`，脚本打印 ASR 意图和模拟的机器狗指令。
+
+如果更换机器狗视频，先离线处理成服务约定的固定分辨率（不会由服务自动缩放）：
+
+```bash
+cd /home/aicor/pruned_sandbox
+ffmpeg -i robotdog2.MOV \
+  -vf 'scale=640:480:force_original_aspect_ratio=increase,crop=640:480' \
+  -an -c:v libx264 -pix_fmt yuv420p -r 30 robotdog2-640x480.mp4
+```
+
+先启动服务并加载环境变量：
+
+```bash
+cd /home/aicor/pruned_sandbox
+set -a
+. ./sandbox.env
+set +a
+docker compose --env-file sandbox.env up -d
+```
+
+运行演示：
+
+```bash
+cd /home/aicor/pruned_sandbox
+.venv/bin/python scripts/e2e_upstream_demo.py
+```
+
+默认使用以下文件：
+
+- 视频：`robotdog2-640x480.mp4`（由 `robotdog2.MOV` 预处理为固定横屏 640×480）
+- 巡逻语音：`test_audio/generated-asr-en.mp3`
+- 驱逐语音：`test_audio/deter-suspect.mp3`
+- 左移语音：`test_audio/turn-left.mp3`
+- 前后右移语音：`test_audio/move-forward.mp3`、`move-backward.mp3`、`turn-right.mp3`
+
+脚本的 Enter 等待不会暂停 WebRTC 和 YOLO 后台任务；视频会在等待下一步时持续处理。
+不存在的方向音频会被明确跳过，不会伪造识别结果。也可以显式传入已有音频：
+
+```bash
+.venv/bin/python scripts/e2e_upstream_demo.py \
+  --direction-audio left=test_audio/turn-left.mp3
+```
+
+脚本只模拟最后一步的狗控指令并打印 JSON；当前 Sandbox 的音频兼容接口只返回
+文字和意图，不会直接向机器狗发送控制动作。
