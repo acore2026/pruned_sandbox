@@ -89,6 +89,19 @@ curl --proxy http://127.0.0.1:7899 --fail --silent --show-error \
 {"request_id":"asr-generated-en-002","text":"Please patrol area B and locate the red doll.","intent":{"type":"UNKNOWN","parameters":{}},"required_skills":[]}
 ```
 
+#### Enter 全流程测试
+
+```bash
+cd /home/aicor/pruned_sandbox
+.venv/bin/python scripts/e2e_upstream_demo.py \
+  --video robotdog2-640x480.mp4 \
+  --direction-audio left=test_audio/turn-left.mp3
+```
+
+按 Enter 依次执行巡逻、绑定、设置 `robot dog` 检测目标、双向 WebRTC、驱逐和左移，
+最后解除绑定。第 5 步启动机器狗视频后等待 10～15 秒，让 YOLO 产生检测框；输出保存到
+`artifacts/robotdog-annotated.mp4`（640×480）。
+
 停止容器：
 
 ```bash
@@ -427,38 +440,3 @@ cd /home/aicor/pruned_sandbox
 测试覆盖三个独立服务、原模型默认值、无会话管理接口，以及真实 aiortc
 端到端链路（消费端先建链、占位帧、H.264 High 源 Answer、YOLO 帧无重协商
 切换、RTP payload 限制和停止媒体）。
-
-## Enter 分步端到端演示
-
-脚本模拟巡逻语音、机器狗视频、眼镜视频接收和语音控制。先启动服务：
-
-```bash
-cd /home/aicor/pruned_sandbox
-set -a
-. ./sandbox.env
-set +a
-docker compose --env-file sandbox.env up -d
-```
-
-运行全流程测试：
-
-```bash
-cd /home/aicor/pruned_sandbox
-.venv/bin/python scripts/e2e_upstream_demo.py \
-  --video robotdog2-640x480.mp4 \
-  --direction-audio left=test_audio/turn-left.mp3
-```
-
-按 Enter 依次执行：
-
-1. 巡逻语音 → `9004`
-2. 创建 Sandbox 绑定 → `28501`
-3. 设置 YOLO 目标 `robot dog`
-4. 建立眼镜端 WebRTC 接收
-5. 建立机器狗端 WebRTC 发送
-6. 驱逐语音
-7. 左移语音
-8. 解除绑定并结束
-
-第 5 步后等待 10～15 秒，让 YOLO 处理视频并产生检测框。输出视频保存到
-`artifacts/robotdog-annotated.mp4`，固定为 640×480。脚本只模拟向机器狗下发的指令。
