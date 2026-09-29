@@ -113,7 +113,7 @@ class VideoSettings:
             yolo_confidence=_float("YOLO_CONFIDENCE", 0.3),
             yolo_iou=_float("YOLO_IOU", 0.4),
             yolo_image_size=_yolo_image_size(),
-            yolo_classes=_csv("YOLO_CLASSES"),
+            yolo_classes=_csv("YOLO_CLASSES", ("person",)),
             video_width=_int("VIDEO_WIDTH", 640, minimum=2),
             video_height=_int("VIDEO_HEIGHT", 480, minimum=2),
             video_fps=_float("VIDEO_FPS", 30.0, minimum=1.0),

@@ -428,7 +428,9 @@ curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
 ```
 
 默认且仅使用原通用 `yolov8s-worldv2.pt`。YOLO 模型进程内只加载一次，
-每个核心网 session ID 使用独立帧管线，多个观看端不会重复推理。
+每个核心网 session ID 使用独立帧管线，多个观看端不会重复推理。未设置会话识别目标时，
+默认类别为 `person`；上游设置 `PUT /v1/recognition-targets/{compute_service_session_id}`
+后，以会话目标覆盖默认类别。
 
 ## 9. 测试
 
