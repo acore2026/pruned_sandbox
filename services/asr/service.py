@@ -10,7 +10,13 @@ import time
 from typing import Any
 import uuid
 
-from .config import AsrSettings
+from .config import (
+    AsrSettings,
+    _DEFAULT_INITIAL_PROMPT_EN,
+    _DEFAULT_INITIAL_PROMPT_ZH,
+    _DEFAULT_HOTWORDS_EN,
+    _DEFAULT_HOTWORDS_ZH,
+)
 
 
 LOGGER = logging.getLogger("sandbox.asr")
@@ -97,15 +103,21 @@ class SpeechRecognizer:
         model = self._load_model()
         started = time.perf_counter()
         created_at_ms = int(time.time() * 1000)
+        effective_language = (language or self.settings.language or "").strip().lower()
+        initial_prompt, hotwords = _recognition_hints(
+            effective_language,
+            self.settings.initial_prompt,
+            self.settings.hotwords,
+        )
         try:
             segment_iter, info = model.transcribe(
                 str(audio_path),
                 beam_size=self.settings.beam_size,
-                language=language or self.settings.language,
+                language=effective_language or None,
                 task="transcribe",
                 vad_filter=True,
-                initial_prompt=self.settings.initial_prompt,
-                hotwords=self.settings.hotwords,
+                initial_prompt=initial_prompt,
+                hotwords=hotwords,
             )
             raw_segments = list(segment_iter)
         except Exception as exc:
@@ -121,7 +133,7 @@ class SpeechRecognizer:
             for segment in raw_segments
             if str(segment.text).strip()
         ]
-        text = " ".join(item["text"] for item in segments).strip()
+        text = _collapse_repeated_text(" ".join(item["text"] for item in segments).strip())
         duration_s = float(getattr(info, "duration", 0.0) or 0.0)
         if not duration_s and segments:
             duration_s = max(item["endSec"] for item in segments)
@@ -177,3 +189,47 @@ class SpeechRecognizer:
             "lastError": self.last_error,
             "latestTranscript": self.latest_transcript,
         }
+
+
+def _recognition_hints(
+    language: str,
+    initial_prompt: str | None,
+    hotwords: str | None,
+) -> tuple[str | None, str | None]:
+    """Avoid feeding a bilingual prompt into a single-language decode."""
+    if language.startswith("en"):
+        prompt = _DEFAULT_INITIAL_PROMPT_EN if _contains_cjk(initial_prompt) else initial_prompt
+        words = _DEFAULT_HOTWORDS_EN if _contains_cjk(hotwords) else hotwords
+        return prompt, words
+    if language.startswith("zh"):
+        prompt = _DEFAULT_INITIAL_PROMPT_ZH if _contains_latin(initial_prompt) else initial_prompt
+        words = _DEFAULT_HOTWORDS_ZH if _contains_latin(hotwords) else hotwords
+        return prompt, words
+    # In auto-detect mode hints can bias Whisper into emitting the prompt's
+    # other language, so leave both optional hints out.
+    return None, None
+
+
+def _contains_cjk(value: str | None) -> bool:
+    return bool(value) and any("\u3400" <= char <= "\u9fff" for char in value)
+
+
+def _contains_latin(value: str | None) -> bool:
+    return bool(value) and any(("a" <= char.lower() <= "z") for char in value)
+
+
+def _collapse_repeated_text(text: str) -> str:
+    """Collapse only an exact two-copy transcript; preserve real repetition."""
+    if not text:
+        return text
+    compact = " ".join(text.split())
+    if len(compact) % 2 == 0:
+        midpoint = len(compact) // 2
+        if compact[:midpoint] == compact[midpoint:]:
+            return compact[:midpoint].strip()
+    parts = compact.split(" ")
+    if len(parts) % 2 == 0:
+        midpoint = len(parts) // 2
+        if parts[:midpoint] == parts[midpoint:]:
+            return " ".join(parts[:midpoint]).strip()
+    return compact

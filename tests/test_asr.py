@@ -12,7 +12,11 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from services.asr.config import AsrSettings
 from services.asr.main import _discovery_skills, _json_response, _public_intent, create_app
-from services.asr.service import SpeechRecognizer
+from services.asr.service import (
+    SpeechRecognizer,
+    _collapse_repeated_text,
+    _recognition_hints,
+)
 
 
 class FakeWhisperModel:
@@ -34,6 +38,28 @@ class FakeWhisperModel:
 
 
 class SpeechRecognizerTest(IsolatedAsyncioTestCase):
+    def test_collapses_only_exact_duplicate_transcripts(self) -> None:
+        self.assertEqual("派机器狗巡逻", _collapse_repeated_text("派机器狗巡逻 派机器狗巡逻"))
+        self.assertEqual("确认", _collapse_repeated_text("确认确认"))
+        self.assertEqual("前进 前进两步", _collapse_repeated_text("前进 前进两步"))
+
+    def test_language_specific_hints_do_not_mix_languages(self) -> None:
+        prompt, hotwords = _recognition_hints(
+            "en",
+            "中文提示 English prompt",
+            "机器狗 patrol",
+        )
+        self.assertIn("smart-glasses", prompt or "")
+        self.assertNotIn("机器狗", hotwords or "")
+
+        prompt, hotwords = _recognition_hints(
+            "",
+            "中文提示 English prompt",
+            "机器狗 patrol",
+        )
+        self.assertIsNone(prompt)
+        self.assertIsNone(hotwords)
+
     async def test_json_response_keeps_chinese_readable(self) -> None:
         response = _json_response({"text": "派机器狗巡逻园区内A区域。"})
         self.assertIn('"text": "派机器狗巡逻园区内A区域。"', response.text)

@@ -41,7 +41,9 @@ class AsrSettings:
 
     @classmethod
     def from_env(cls) -> "AsrSettings":
-        language = os.getenv("ASR_LANGUAGE", "zh").strip()
+        # Empty means Whisper performs language detection. Callers may still
+        # override this per request with ``language=zh`` or ``language=en``.
+        language = os.getenv("ASR_LANGUAGE", "").strip()
         download_root = os.getenv("ASR_DOWNLOAD_ROOT", "/models/asr").strip()
         return cls(
             host=os.getenv("ASR_HOST", os.getenv("WHISPER_HOST", "0.0.0.0")),
@@ -90,7 +92,15 @@ _DEFAULT_INITIAL_PROMPT = (
     "这是智能眼镜与机器狗协同执行园区巡逻的语音助手。首句任务可能是巡逻巡检、"
     "查看实时画面或可疑物识别；运行期可识别威吓歹徒、驱逐歹徒和机器狗移动方向。"
 )
+_DEFAULT_INITIAL_PROMPT_ZH = _DEFAULT_INITIAL_PROMPT
+_DEFAULT_INITIAL_PROMPT_EN = (
+    "This is a smart-glasses and robot-dog campus patrol voice assistant. "
+    "The user may request patrol, inspection, live video, suspicious-object "
+    "recognition, deterrence, expulsion, or robot-dog movement."
+)
 _DEFAULT_HOTWORDS = (
     "机器狗 巡逻 巡检 园区 区域 A区域 B区域 实时画面 查看现场 可疑物识别 "
     "威吓 驱逐 歹徒 向前 退后 向左 向右 左转 右转"
 )
+_DEFAULT_HOTWORDS_ZH = "机器狗 巡逻 巡检 园区 区域 A区域 B区域 实时画面 查看现场 可疑物识别 威吓 驱逐 歹徒 向前 退后 向左 向右 左转 右转"
+_DEFAULT_HOTWORDS_EN = "robot dog patrol inspection campus area live video scene suspicious object recognition deter expel suspect forward backward left right turn wave"
