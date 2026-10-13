@@ -1,0 +1,7 @@
+# WSL2 的 GPU 设备需要显式交给 Docker 管理，避免 systemd daemon-reload
+# 清除 NVIDIA runtime hook 注入的设备访问权限。
+# 在 sandbox.env 中设置 COMPOSE_FILE=docker-compose.yml:docker-compose.wsl.yml 启用。
+services:
+  sandbox:
+    devices:
+      - /dev/dxg:/dev/dxg:rw

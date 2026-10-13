@@ -103,4 +103,4 @@ _DEFAULT_HOTWORDS = (
     "威吓 驱逐 歹徒 向前 退后 向左 向右 左转 右转"
 )
 _DEFAULT_HOTWORDS_ZH = "机器狗 巡逻 巡检 园区 区域 A区域 B区域 实时画面 查看现场 可疑物识别 威吓 驱逐 歹徒 向前 退后 向左 向右 左转 右转"
-_DEFAULT_HOTWORDS_EN = "robot dog patrol inspection campus area live video scene suspicious object recognition deter expel suspect forward backward left right turn wave"
+_DEFAULT_HOTWORDS_EN = "robot dog patrol inspection campus area live video scene suspicious object recognition deter expel suspect forward backward left right turn"

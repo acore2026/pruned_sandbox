@@ -38,6 +38,11 @@ def create_app(
     )
     app[SETTINGS_KEY] = active_settings
     app[RECOGNIZER_KEY] = active_recognizer
+
+    async def startup(_: web.Application) -> None:
+        await active_recognizer.warmup()
+
+    app.on_startup.append(startup)
     app.add_routes(
         [
             web.get("/health", health),
@@ -76,7 +81,14 @@ async def transcribe(request: web.Request) -> web.Response:
         settings = request.app[SETTINGS_KEY]
         if settings.intent_profile == "discovery":
             response["required_skills"] = _discovery_skills(intent)
-        return _json_response(response)
+        http_response = _json_response(response)
+        LOGGER.info(
+            "asr_response profile=%s status=%s response=%s",
+            settings.intent_profile,
+            http_response.status,
+            http_response.text,
+        )
+        return http_response
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -219,9 +231,11 @@ def _public_intent(
     if profile == "discovery" and normalized_scene == "object_recognition":
         return {"type": "OBJECT_RECOGNITION", "parameters": {}}
     if profile == "runtime" and normalized_scene in {"defense", "movement"}:
-        direction = "expel" if normalized_scene == "defense" else str(argument).strip()
-        if direction not in {"forward", "backward", "left", "right", "wave", "expel"}:
-            direction = "forward"
+        direction = str(argument).strip()
+        if normalized_scene == "defense" and direction not in {"deter", "expel"}:
+            return {"executor": None, "type": "other", "matched": False, "backend": backend}
+        if direction not in {"forward", "backward", "left", "right", "happy", "deter", "expel"}:
+            return {"executor": None, "type": "other", "matched": False, "backend": backend}
         return {
             "executor": "robot dog",
             "type": "movement",

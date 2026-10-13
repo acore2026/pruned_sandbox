@@ -97,6 +97,7 @@ def create_app(
         ]
     )
     active_runtime.api.register_routes(app)
+    app.on_startup.append(_warmup_detector)
 
     async def shutdown(_: web.Application) -> None:
         await active_runtime.close()
@@ -134,7 +135,12 @@ def create_user_app(runtime: VideoRuntime) -> web.Application:
         ]
     )
     runtime.api.register_user_routes(app)
+    app.on_startup.append(_warmup_detector)
     return app
+
+
+async def _warmup_detector(app: web.Application) -> None:
+    await asyncio.to_thread(app[RUNTIME_KEY].detector.warmup)
 
 
 def _base_app(runtime: VideoRuntime) -> web.Application:

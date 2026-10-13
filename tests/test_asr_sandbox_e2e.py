@@ -120,38 +120,34 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
             "role": "consumer",
             "agent_id": "glasses",
         }
-        upload = FormData()
-        upload.add_field("request_id", "audio-action-1")
-        upload.add_field("computing_context", json.dumps(context))
-        upload.add_field(
-            "file",
-            b"mock-wave-bytes",
-            filename="voice.wav",
-            content_type="audio/wav",
-        )
-        response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
-        action = await response.json()
-        self.assertEqual(200, response.status, action)
-        self.assertEqual("audio-action-1", action["request_id"])
-        self.assertEqual("威吓歹徒", action["text"])
-        self.assertIsNone(FakeWhisperModel.last_language)
-        self.assertEqual(
-            {
-                "executor": "robot dog",
-                "type": "movement",
-                "direction": "expel",
-                "matched": True,
-                "backend": "rules",
-            },
-            action["intent"],
-        )
-
-        health = await (await self.asr.get("/health")).json()
-        self.assertTrue(health["ready"])
-        self.assertEqual("威吓歹徒", health["latestTranscript"]["text"])
+        for text, direction in (("Threaten the suspect.", "deter"), ("Deter the suspect.", "deter"), ("威吓歹徒", "deter"), ("Expel the suspect.", "expel"), ("Move forward.", "forward"),
+                                ("Move backward.", "backward"), ("Turn left.", "left"),
+                                ("Turn right.", "right"), ("驱逐歹徒", "expel"),
+                                ("detered", "deter"), ("Detered the suspect.", "deter"),
+                                ("deterred the suspect.", "deter"),
+                                ("the turds I suspect.", "deter"),
+                                ("expelled the suspect.", "expel"),
+                                ("Move forwards.", "forward"), ("Turn write.", "right"),
+                                ("Go straight", "forward"), ("Get forward", "forward"),
+                                ("deters a suspect.", "deter"), ("deters the suspect", "deter")):
+            FakeWhisperModel.transcript_text = text
+            upload = FormData()
+            upload.add_field("request_id", "audio-action-1")
+            upload.add_field("computing_context", json.dumps(context))
+            upload.add_field("file", b"mock-wave-bytes", filename="voice.wav", content_type="audio/wav")
+            with patch("services.sandbox.api.SandboxApi._create_control_action_with_classified",
+                       side_effect=AssertionError("ASR must not execute control")):
+                response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
+            body = await response.json()
+            self.assertEqual(200, response.status, body)
+            self.assertEqual(text, body["text"])
+            self.assertEqual(direction, body["intent"]["direction"])
+            self.assertTrue(body["intent"]["matched"])
+            self.assertEqual("rules", body["intent"]["backend"])
+            self.assertIsNone(FakeWhisperModel.last_language)
+            self.assertNotIn("action_id", body)
 
     async def test_non_action_audio_still_returns_transcription(self) -> None:
-        FakeWhisperModel.transcript_text = "今天天气不错"
         configuration = {
             "compute_service_session_id": "css-voice-2",
             "connection_parameters": {
@@ -185,21 +181,23 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
             "role": "consumer",
             "agent_id": "glasses",
         }
-        upload = FormData()
-        upload.add_field("request_id", "audio-non-action-1")
-        upload.add_field("computing_context", json.dumps(context))
-        upload.add_field("language", "zh")
-        upload.add_field("file", b"mock-wave-bytes", filename="voice.wav", content_type="audio/wav")
-        response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
-        body = await response.json()
-        self.assertEqual(200, response.status, body)
-        self.assertEqual("今天天气不错", body["text"])
-        self.assertEqual(
-            {
-                "executor": None,
-                "type": "other",
-                "matched": False,
-                "backend": "rules",
-            },
-            body["intent"],
-        )
+        for text in ("今天天气不错", "Don't detered the suspect.",
+                     "detered or expel the suspect.", "Yesterday we deterred the suspect.",
+                     "defer the suspect", "write", "wave", "Please WAVE!",
+                     "wave hello", "say hello", "hello", "挥手", "打招呼", "你好"):
+            with self.subTest(text=text):
+                FakeWhisperModel.transcript_text = text
+                upload = FormData()
+                upload.add_field("request_id", "audio-non-action-1")
+                upload.add_field("computing_context", json.dumps(context))
+                upload.add_field("file", b"mock-wave-bytes", filename="voice.wav", content_type="audio/wav")
+                with patch("services.sandbox.api.SandboxApi._create_control_action_with_classified",
+                           side_effect=AssertionError("ASR must not execute control")):
+                    response = await self.sandbox.post("/v1/audio-control-actions", data=upload)
+                body = await response.json()
+                self.assertEqual(200, response.status, body)
+                self.assertEqual(text, body["text"])
+                self.assertEqual(
+                    {"executor": None, "type": "other", "matched": False, "backend": "rules"},
+                    body["intent"],
+                )

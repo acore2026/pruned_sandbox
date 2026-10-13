@@ -8,6 +8,31 @@ from aiortc import RTCConfiguration, RTCIceServer
 from .config import VideoSettings
 
 
+def public_host_candidates(sdp: str, public_ip: str) -> str:
+    """Advertise the configured reachable interface, without VPN route churn.
+
+    Keep discovery behavior when the configured address isn't a local ICE
+    candidate (for example a NAT deployment using server-reflexive candidates).
+    """
+    lines = sdp.splitlines()
+    public = []
+    for line in lines:
+        if line.startswith("a=candidate:"):
+            parts = line.split()
+            if len(parts) >= 8 and parts[4] == public_ip and parts[7] == "host":
+                public.append(parts)
+    if not public:
+        return sdp
+    result = []
+    for line in lines:
+        if line.startswith("a=candidate:"):
+            parts = line.split()
+            if len(parts) >= 8 and parts[7] == "host" and parts[4] != public_ip:
+                continue
+        result.append(line)
+    return "\r\n".join(result) + "\r\n"
+
+
 def build_rtc_configuration(settings: VideoSettings) -> RTCConfiguration:
     servers: list[RTCIceServer] = []
     for url in settings.rtc_ice_servers:

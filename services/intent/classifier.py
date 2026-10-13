@@ -9,6 +9,7 @@ import threading
 from typing import Any
 
 from .config import IntentSettings
+from .command_normalization import command_is_blocked, normalize_command_text
 
 
 DEFAULT_INTENTS = {
@@ -47,8 +48,11 @@ OBJECT_RECOGNITION_KEYWORDS = (
     "识别可疑物",
 )
 MOVEMENT_COMMANDS = {
+    "happy": "happy",
     "move forward": "forward",
     "go forward": "forward",
+    "go straight": "forward",
+    "get forward": "forward",
     "step forward": "forward",
     "forward": "forward",
     "move back": "backward",
@@ -66,10 +70,6 @@ MOVEMENT_COMMANDS = {
     "go right": "right",
     "turn right": "right",
     "right": "right",
-    "wave hello": "wave",
-    "say hello": "wave",
-    "hello": "wave",
-    "wave": "wave",
     # Legacy aliases are kept for existing callers; English is the canonical input language.
     "向前": "forward",
     "向前走": "forward",
@@ -81,9 +81,6 @@ MOVEMENT_COMMANDS = {
     "左转": "left",
     "向右": "right",
     "右转": "right",
-    "挥手": "wave",
-    "打招呼": "wave",
-    "你好": "wave",
 }
 FIND_PREFIXES = (
     "please look for",
@@ -206,8 +203,9 @@ class RuleIntentClassifier:
 
     def classify(self, text: str) -> IntentResult:
         normalized = " ".join(str(text or "").strip().split())
-        if not normalized:
+        if not normalized or command_is_blocked(normalized):
             return IntentResult("other", "", 1.0, self.name)
+        normalized = normalize_command_text(normalized)
         movement = self._movement(normalized)
         if movement:
             return IntentResult("movement", movement, 1.0, self.name)
@@ -218,8 +216,9 @@ class RuleIntentClassifier:
             return IntentResult("video_task", "", 1.0, self.name)
         if self._object_recognition(normalized):
             return IntentResult("object_recognition", "", 1.0, self.name)
-        if self._defense(normalized):
-            return IntentResult("defense", "suspect", 1.0, self.name)
+        defense = self._defense(normalized)
+        if defense:
+            return IntentResult("defense", defense, 1.0, self.name)
         grab = self._argument_after_prefix(normalized, GRAB_PREFIXES)
         if grab is not None:
             argument, i18n = self._normalize_object(grab)
@@ -241,22 +240,28 @@ class RuleIntentClassifier:
     @staticmethod
     def _patrol(text: str) -> str | None:
         lowered = text.lower()
-        if any(keyword in text for keyword in ("巡逻", "巡检")):
+        if re.match(
+            r"^(?:请)?(?:帮我)?(?:(?:机器狗)?(?:巡逻|巡检)"
+            r"|(?:派|让|叫)机器狗.*?(?:巡逻|巡检))", text
+        ):
             match = LEGACY_PATROL_AREA_PATTERN.search(text)
             return match.group(1) if match else ""
-        if not any(
-            re.search(rf"\b{re.escape(keyword)}\b", lowered)
-            for keyword in PATROL_KEYWORDS
-        ):
+        if not re.match(r"^(?:patrol|inspect|inspection)\b", lowered):
             return None
         match = PATROL_AREA_PATTERN.search(lowered)
         return match.group(1).upper() if match else ""
 
     @staticmethod
-    def _defense(text: str) -> bool:
-        return WORD_BOUNDARY_DEFENSE_PATTERN.search(text) is not None or any(
-            keyword in text for keyword in ("威吓", "驱逐")
-        )
+    def _defense(text: str) -> str:
+        target = r"(?:\s+(?:the\s+|a\s+)?(?:suspects?|intruders?|criminals?|person|bad guy))?"
+        match = re.fullmatch(r"(expel|drive away|threaten|deter|intimidate)" + target,
+                             text, re.IGNORECASE)
+        if match:
+            return "expel" if match[1].lower() in {"expel", "drive away"} else "deter"
+        match = re.fullmatch(r"(?:请|请帮我|帮我)?(驱逐|威吓|威慑)(?:歹徒|嫌疑人|坏人)?", text)
+        if match:
+            return "expel" if match[1] == "驱逐" else "deter"
+        return ""
 
     @staticmethod
     def _video_task(text: str) -> bool:
@@ -343,12 +348,14 @@ class QwenIntentClassifier:
             "This is a campus patrol scenario using smart glasses and a robot dog. Classify only "
             f"the request into one of {list(self.settings.candidates)}. Return JSON only "
             "with keys intent and argument. Movement argument must be forward, backward, left, "
-            "right, or wave. Examples: move forward=forward, move backward=backward, "
+            "right, or happy. Examples: move forward=forward, move backward=backward, "
             "turn left=left, turn right=right. "
             "A request to start a campus patrol or inspection must be patrol; its argument is "
             "the requested area. Requests for a live view or to view the site must be video_task. "
             "Requests for suspicious-object recognition must be object_recognition. Commands to "
-            "threaten or expel a suspect must be defense; its argument is suspect. "
+            "threaten, deter or intimidate a suspect must be defense with argument deter. "
+            "Expelling or driving away a suspect must be defense with argument expel. "
+            "Never use happy or suspect as the argument for these defense requests. "
             f"Command: {json.dumps(text, ensure_ascii=False)}"
         )
         messages = [
@@ -382,11 +389,31 @@ class IntentService:
         self.qwen = QwenIntentClassifier(settings)
         self.last_backend = "rules"
         self.last_error: str | None = None
+        self.warmed_up = False
+        self._warmup_lock = asyncio.Lock()
+
+    async def warmup(self) -> None:
+        if self.settings.backend not in {"qwen", "hybrid"}:
+            return
+        async with self._warmup_lock:
+            if self.warmed_up:
+                return
+            try:
+                # Load weights and execute generation; discard the synthetic
+                # classification instead of exposing it as a user request.
+                await asyncio.to_thread(self.qwen.classify, "What is the weather today?")
+            except Exception as exc:
+                self.last_error = str(exc)
+                if self.settings.backend == "qwen":
+                    raise
+                return  # Hybrid deployments retain their rules fallback.
+            self.warmed_up = True
+            self.last_error = None
 
     async def classify(self, text: str) -> dict[str, Any]:
         normalized = " ".join(str(text or "").strip().split())
         rule_result = self.rules.classify(normalized)
-        if self.settings.backend == "rules" or (
+        if command_is_blocked(normalized) or self.settings.backend == "rules" or (
             rule_result.intent in self.settings.candidates and rule_result.intent != "other"
         ):
             if rule_result.intent not in self.settings.candidates:
@@ -397,6 +424,11 @@ class IntentService:
         if self.settings.backend in {"qwen", "hybrid"} and normalized:
             try:
                 result = await asyncio.to_thread(self.qwen.classify, normalized)
+                # Runtime actions are a bounded command vocabulary. A model
+                # guess without a matching command must not turn chatter or
+                # an ambiguous ASR fragment into a runtime action.
+                if result.intent in {"defense", "movement"}:
+                    result = IntentResult("other", "", 1.0, self.rules.name)
                 self.last_backend = result.backend
                 self.last_error = None
                 return result.to_dict()
@@ -416,6 +448,7 @@ class IntentService:
             "service": "intent",
             "backend": self.settings.backend,
             "lastBackend": self.last_backend,
+            "warmedUp": self.warmed_up,
             "model": self.settings.model if self.settings.backend != "rules" else None,
             "lastError": self.last_error,
             "intents": list(self.settings.candidates),

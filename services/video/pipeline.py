@@ -12,6 +12,7 @@ import numpy as np
 from aiortc.mediastreams import MediaStreamError, MediaStreamTrack
 
 from .config import VideoSettings
+from .classes import normalize_class
 from .detector import YoloDetector
 
 
@@ -29,7 +30,10 @@ class FramePipeline:
         self._detections_changed = asyncio.Condition()
         self._detection_revision = 0
         self._last_detections: list[dict[str, Any]] = []
+        self._startup_at = time.monotonic()
         self._latest_image = self._placeholder("Waiting for WebRTC source")
+        self._stalled_image = self._placeholder("Video source stalled")
+        self._last_processed_at: float | None = None
         self._source_task: asyncio.Task[None] | None = None
         self._source_track: MediaStreamTrack | None = None
         self._source_id: str | None = None
@@ -62,6 +66,7 @@ class FramePipeline:
         self._source_id = None
         self.first_frame.clear()
         self.processed_frame.clear()
+        self._startup_at = time.monotonic()
         self._latest_image = self._placeholder("Waiting for WebRTC source")
         return True
 
@@ -70,7 +75,9 @@ class FramePipeline:
 
     @property
     def source_frame_available(self) -> bool:
-        return self.processed_frame.is_set()
+        return (self.processed_frame.is_set()
+                and self._last_processed_at is not None
+                and time.monotonic() - self._last_processed_at <= 3.0)
 
     async def _cancel_source_task(self) -> None:
         task = self._source_task
@@ -154,6 +161,7 @@ class FramePipeline:
             self._latest_image = self._fit_output(annotated)
             self.processed_frames += 1
             self.last_frame_at_ms = int(time.time() * 1000)
+            self._last_processed_at = time.monotonic()
             self.processed_frame.set()
             async with self._detections_changed:
                 self._last_detections = detections
@@ -161,10 +169,16 @@ class FramePipeline:
                 self._detections_changed.notify_all()
 
     def latest_image(self) -> np.ndarray:
+        # A live ICE connection does not prove the camera is still producing.
+        # Do not repeatedly present an old image as live after USB/source loss.
+        if self.processed_frame.is_set() and not self.source_frame_available:
+            return self._stalled_image
+        if not self.processed_frame.is_set():
+            return self._startup_animation()
         return self._latest_image
 
     def set_recognition_target(self, prompt: str | None) -> None:
-        normalized = str(prompt or "").strip()
+        normalized = normalize_class(str(prompt or ""))
         self._recognition_classes = (normalized,) if normalized else None
 
     def _active_classes(self) -> tuple[str, ...] | None:
@@ -176,7 +190,7 @@ class FramePipeline:
         self, prompt: str, timeout_ms: int
     ) -> list[dict[str, Any]]:
         """Run a one-shot search without replacing the persistent target."""
-        normalized = prompt.strip()
+        normalized = normalize_class(prompt)
         if not normalized:
             return []
         deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
@@ -221,6 +235,28 @@ class FramePipeline:
             "lastError": self.last_error,
         }
 
+    def _startup_animation(self) -> np.ndarray:
+        # Monotonic looping animation, not a fabricated completion percentage.
+        elapsed = time.monotonic() - self._startup_at
+        canvas = np.zeros((480, 640, 3), dtype=np.uint8)
+        canvas[:] = (24, 17, 12)
+        accent = (225, 210, 70)
+        cx, cy = 320, 190
+        cv2.circle(canvas, (cx, cy), 62, (65, 52, 35), 2, cv2.LINE_AA)
+        angle = int(elapsed * 120) % 360
+        cv2.ellipse(canvas, (cx, cy), (62, 62), 0, angle, angle + 100, accent, 5, cv2.LINE_AA)
+        for offset in (-14, 0, 14):
+            cv2.line(canvas, (cx - 22, cy + offset), (cx + 22, cy + offset), accent, 3, cv2.LINE_AA)
+        title = "SANDBOX"
+        for text, y, scale, color in [(title, 295, 1.0, (240, 240, 240))]:
+            size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0]
+            cv2.putText(canvas, text, ((640 - size[0]) // 2, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+        for i in range(3):
+            color = accent if int(elapsed * 3) % 3 == i else (65, 52, 35)
+            cv2.circle(canvas, (300 + i * 20, 370), 4, color, -1, cv2.LINE_AA)
+        return cv2.resize(canvas, (self.settings.video_width, self.settings.video_height))
+
     def _placeholder(self, text: str) -> np.ndarray:
         canvas = np.zeros((self.settings.video_height, self.settings.video_width, 3), dtype=np.uint8)
         canvas[:, :, :] = (18, 18, 18)
@@ -261,23 +297,52 @@ class OutputVideoTrack(MediaStreamTrack):
     def __init__(self, pipeline: FramePipeline, fps: float) -> None:
         super().__init__()
         self.pipeline = pipeline
-        self._interval = 1.0 / max(fps, 1.0)
-        self._timestamp_step = max(1, round(90000 / max(fps, 1.0)))
+        self._interval = 1.0 / min(20.0, max(fps, 1.0))
+        self._clock_origin: float | None = None
         self._timestamp = 0
         self._next_frame_at = 0.0
+        self._last_processed = -1
+        self._stalled_sent = False
 
     async def recv(self) -> av.VideoFrame:
+        # Each receiver consumes a processed revision at most once. Slow
+        # senders skip intermediate revisions rather than enqueue old images.
+        delay = self._next_frame_at - time.perf_counter()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        while True:
+            if self.readyState != "live":
+                raise MediaStreamError
+            if not self.pipeline.processed_frame.is_set():
+                # Preserve the existing startup animation before camera arrival.
+                self._stalled_sent = False
+                break
+            if (self.pipeline.source_frame_available and
+                    self.pipeline.processed_frames != self._last_processed):
+                self._stalled_sent = False
+                break
+            if not self.pipeline.source_frame_available and not self._stalled_sent:
+                # A single status frame on stall; never repeat the old scene.
+                self._stalled_sent = True
+                break
+            async with self.pipeline._detections_changed:
+                try:
+                    await asyncio.wait_for(
+                        self.pipeline._detections_changed.wait_for(
+                            lambda: self.pipeline.processed_frames != self._last_processed
+                            or not self.pipeline.processed_frame.is_set()
+                            or self.readyState != "live"
+                        ), timeout=0.25,
+                    )
+                except asyncio.TimeoutError:
+                    # Check source liveness and stop even without new detections.
+                    pass
+        self._last_processed = self.pipeline.processed_frames
         now = time.perf_counter()
-        if self._next_frame_at == 0.0:
-            self._next_frame_at = now
-        else:
-            self._next_frame_at += self._interval
-            delay = self._next_frame_at - now
-            if delay > 0:
-                await asyncio.sleep(delay)
-            elif delay < -(self._interval * 2):
-                self._next_frame_at = time.perf_counter()
-        self._timestamp += self._timestamp_step
+        self._next_frame_at = now + self._interval
+        if self._clock_origin is None:
+            self._clock_origin = now
+        self._timestamp = max(self._timestamp + 1, round((now - self._clock_origin) * 90000))
         frame = av.VideoFrame.from_ndarray(self.pipeline.latest_image(), format="bgr24")
         frame.pts = self._timestamp
         frame.time_base = fractions.Fraction(1, 90000)

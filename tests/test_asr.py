@@ -102,7 +102,7 @@ class SpeechRecognizerTest(IsolatedAsyncioTestCase):
             _discovery_skills({"type": "OBJECT_RECOGNITION"}),
         )
 
-    async def test_runtime_public_intent_unifies_defense_commands(self) -> None:
+    async def test_runtime_public_intent_preserves_expel(self) -> None:
         self.assertEqual(
             {
                 "executor": "robot dog",
@@ -111,8 +111,23 @@ class SpeechRecognizerTest(IsolatedAsyncioTestCase):
                 "matched": True,
                 "backend": "rules",
             },
-            _public_intent("defense", "suspect", "runtime"),
+            _public_intent("defense", "expel", "runtime"),
         )
+
+    def test_runtime_public_intent_preserves_deter(self) -> None:
+        for backend in ("rules", "qwen"):
+            intent = _public_intent("defense", "deter", "runtime", backend)
+            self.assertEqual({"executor": "robot dog", "type": "movement",
+                              "direction": "deter", "matched": True,
+                              "backend": backend}, intent)
+        self.assertFalse(_public_intent("defense", "suspect", "runtime")["matched"])
+
+    def test_runtime_rejects_removed_direction_from_remote_intent(self) -> None:
+        for backend in ("rules", "qwen"):
+            result = _public_intent("movement", "wave", "runtime", backend)
+            self.assertEqual("other", result["type"])
+            self.assertFalse(result["matched"])
+            self.assertNotIn("direction", result)
 
     async def test_transcribe_returns_legacy_compatible_payload(self) -> None:
         created: list[FakeWhisperModel] = []

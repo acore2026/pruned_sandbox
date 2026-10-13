@@ -68,3 +68,13 @@ class SeparateServiceApiTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(404, asr_response.status)
         self.assertEqual(404, video_response.status)
+
+    async def test_detection_class_endpoint_normalizes_sword_aliases(self) -> None:
+        response = await self.sandbox.get("/api/v1/detection/classes")
+        self.assertEqual({"classes": ["sword"]}, await response.json())
+        response = await self.sandbox.post(
+            "/api/v1/detection/classes",
+            json={"classes": ["光剑", "light saber", "SWORD"]},
+        )
+        self.assertEqual(200, response.status)
+        self.assertEqual({"classes": ["sword"]}, await response.json())

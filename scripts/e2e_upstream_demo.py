@@ -81,6 +81,7 @@ class Demo:
         self.output_writer: cv2.VideoWriter | None = None
         self.output_frames = 0
         self.bound = False
+        self.failures: list[str] = []
 
     @property
     def producer_context(self) -> dict[str, str]:
@@ -107,9 +108,11 @@ class Demo:
             return {"Authorization": f"Bearer {self.args.management_token}"}
         return {}
 
-    @staticmethod
-    async def wait_for_enter(prompt: str) -> None:
+    async def wait_for_enter(self, prompt: str) -> None:
         """Wait for Enter without blocking WebRTC and YOLO tasks."""
+        if self.args.auto:
+            print(prompt)
+            return
         await asyncio.to_thread(input, prompt)
 
     async def request_json(self, method: str, url: str, **kwargs: Any) -> Any:
@@ -202,9 +205,9 @@ class Demo:
             "PUT",
             f"{self.sandbox}/v1/recognition-targets/{self.session_id}",
             json={
-                "request_id": f"e2e-target-robotdog-{self.run_id}",
+                "request_id": f"e2e-target-{self.run_id}",
                 "computing_context": self.consumer_context,
-                "input": {"type": "TEXT", "text": "Find the robot dog."},
+                "input": {"type": "TEXT", "text": self.args.recognition_target},
             },
         )
         print("识别目标:", json.dumps(result, ensure_ascii=False))
@@ -312,7 +315,10 @@ class Demo:
         data.add_field("file", path.open("rb"), filename=path.name)
         result = await self.request_json("POST", f"{self.sandbox}/v1/audio-control-actions", data=data)
         print(f"28502 {name}:", json.dumps(result, ensure_ascii=False, indent=2))
-        intent = result.get("intent") or {}
+        intent = result.get("intent") or {
+            "type": result.get("normalized_action"),
+            **(result.get("normalized_parameters") or {}),
+        }
         print("模拟下发机器狗指令:", json.dumps(self.command_from_intent(intent), ensure_ascii=False))
 
     @staticmethod
@@ -332,17 +338,26 @@ class Demo:
             await self.send_patrol()
             await self.wait_for_enter("[2/8] 按 Enter：创建 sandbox 测试绑定... ")
             await self.bind()
-            await self.wait_for_enter("[3/8] 按 Enter：设置 YOLO 目标 robot dog... ")
+            await self.wait_for_enter(f"[3/8] 按 Enter：设置 YOLO 目标 {self.args.recognition_target}... ")
             await self.set_recognition_target()
             await self.wait_for_enter("[4/8] 按 Enter：启动眼镜端视频接收... ")
             await self.start_consumer()
             await self.wait_for_enter("[5/8] 按 Enter：启动机器狗模拟视频... ")
             await self.start_source()
+            if self.args.observe_seconds > 0:
+                print(f"录制识别视频 {self.args.observe_seconds:g} 秒...")
+                await asyncio.sleep(self.args.observe_seconds)
+                sessions = await self.request_json("GET", f"{self.sandbox}/debug/v1/sessions")
+                own_session = next(
+                    (item for item in sessions.get("sessions", []) if item["session_id"] == self.binding_ref),
+                    None,
+                )
+                print("本次视频管线:", json.dumps(own_session, ensure_ascii=False))
             await self.wait_for_enter("[6/8] 按 Enter：发送驱逐语音... ")
-            await self.send_action("expel", Path(self.args.expel_audio))
+            await self.test_action("expel", Path(self.args.expel_audio))
             for index, (name, path) in enumerate(self.args.direction_audio, start=1):
                 await self.wait_for_enter(f"[7.{index}/8] 按 Enter：发送 {name} 语音... ")
-                await self.send_action(name, Path(path))
+                await self.test_action(name, Path(path))
             await self.wait_for_enter("[8/8] 按 Enter：结束测试并解除绑定... ")
         finally:
             if self.output_task is not None:
@@ -356,6 +371,17 @@ class Demo:
                 await self.unbind()
                 await self.http.close()
             print(f"测试结束，共接收处理后视频帧: {self.output_frames}")
+        if self.failures:
+            raise RuntimeError("部分语音步骤失败: " + "; ".join(self.failures))
+
+    async def test_action(self, name: str, path: Path) -> None:
+        try:
+            await self.send_action(name, path)
+        except Exception as exc:
+            if not self.args.auto:
+                raise
+            self.failures.append(f"{name}: {exc}")
+            print(f"语音步骤失败 {name}: {exc}")
 
     @staticmethod
     async def wait_ice(pc: RTCPeerConnection) -> None:
@@ -383,6 +409,9 @@ def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     audio = root / "test_audio"
     parser.add_argument("--video", default=str(root / "robotdog2-640x480.mp4"))
+    parser.add_argument("--recognition-target", default="Find the sword.")
+    parser.add_argument("--auto", action="store_true", help="run every step without waiting for Enter")
+    parser.add_argument("--observe-seconds", type=float, default=0.0, help="record video before testing runtime audio")
     parser.add_argument("--patrol-audio", default=str(audio / "generated-asr-en.mp3"))
     parser.add_argument("--expel-audio", default=str(audio / "deter-suspect.mp3"))
     parser.add_argument("--direction-audio", action="append", default=[], metavar="NAME=FILE")

@@ -26,6 +26,11 @@ def create_app(
     app = web.Application(middlewares=[cors_middleware, error_middleware])
     app[SETTINGS_KEY] = active_settings
     app[SERVICE_KEY] = service or IntentService(active_settings)
+
+    async def startup(_: web.Application) -> None:
+        await app[SERVICE_KEY].warmup()
+
+    app.on_startup.append(startup)
     app.add_routes(
         [
             web.get("/health", health),

@@ -15,6 +15,15 @@ tailscale ip -4
 
 ### 1.2 使用容器启动（推荐）
 
+如果运行环境是 WSL2，在 `sandbox.env` 中加入以下配置；原生 Linux 不需要：
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml:docker-compose.wsl.yml
+```
+
+该配置显式声明 WSL2 的 GPU 设备 `/dev/dxg`，让 Docker 保留设备访问权限，
+避免 `systemctl daemon-reload` 后容器无法访问 GPU。
+
 ```bash
 cd /home/aicor/pruned_sandbox
 set -a
@@ -98,9 +107,23 @@ cd /home/aicor/pruned_sandbox
   --direction-audio left=test_audio/turn-left.mp3
 ```
 
-按 Enter 依次执行巡逻、绑定、设置 `robot dog` 检测目标、双向 WebRTC、驱逐和左移，
+按 Enter 依次执行巡逻、绑定、设置 `sword` 检测目标、双向 WebRTC、驱逐和左移，
 最后解除绑定。第 5 步启动机器狗视频后等待 10～15 秒，让 YOLO 产生检测框；输出保存到
 `artifacts/robotdog-annotated.mp4`（640×480）。
+
+测试光剑视频时，先准备 640×480 的输入，再执行自动全流程测试：
+
+```bash
+ffmpeg -i sword.MOV -vf 'scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,fps=15' \
+  -an -c:v libx264 -pix_fmt yuv420p artifacts/sword-640x480.mp4
+.venv/bin/python scripts/e2e_upstream_demo.py \
+  --video artifacts/sword-640x480.mp4 --recognition-target '寻找红色光剑' \
+  --auto --observe-seconds 45 --output-fps 30 --direction-audio left=test_audio/turn-left.mp3 \
+  --output-video artifacts/sword-webrtc-annotated.mp4
+```
+
+`--auto` 模式会记录失败的运行期语音步骤并继续后续测试，结束时返回失败状态，
+方便保留视频测试结果和定位语音接口问题。测试只解除本次创建的独立绑定。
 
 ### 1.7 停止容器
 
@@ -153,7 +176,7 @@ cd /home/aicor/pruned_sandbox
 /home/aicor/pruned_sandbox/models/
 ├── whisper-models/whisper-large-v3/model.bin
 ├── semantic-models/Qwen/Qwen2.5-0.5B-Instruct/model.safetensors
-└── yolo-models/yolov8s-worldv2.pt
+└── yolo-models/sword.pt
 ```
 
 Sandbox作为当前GPU机器上的独立容器运行，使用宿主机网络并通过Tailscale与上下游
@@ -209,11 +232,10 @@ Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持�
 
 - `whisper-large-v3`（支持中文和英文）
 - `Qwen2.5-0.5B-Instruct`
-- `yolov8s-worldv2.pt`
-- YOLO-World 的本地 CLIP 权重 `ViT-B-32.pt`（用于动态设置 `light saber` 等文本目标）
+- 自训练的 `sword.pt`，类别为 `sword`；使用权重中已有的类别和文本特征，无需额外 CLIP 权重。
 
 默认模型源目录由`sandbox.env.example`中的`ASR_MODEL_SOURCE`、`INTENT_MODEL_SOURCE`、
-`YOLO_MODEL_SOURCE`和`YOLO_CLIP_SOURCE`配置。这四个目录/文件是容器启动前的必要条件；
+`YOLO_MODEL_SOURCE`配置。这三个模型目录是容器启动前的必要条件；
 `bash scripts/check_model_sources.sh`
 可检查它们是否完整。
 
@@ -223,6 +245,23 @@ Sandbox仍会执行设备动作。视频识别仍使用`U-RECOGNITION`维护持�
 容器需要Docker Compose、NVIDIA Container Toolkit及可用GPU。默认基础镜像为
 `nvidia/cuda:13.0.1-runtime-ubuntu24.04`；它不包含CUDA编译工具，可显著减小镜像。
 可通过`BASE_IMAGE`覆盖为兼容的本地镜像。
+
+WSL2 下，如果语音接口返回 `CUDA driver version is insufficient for CUDA runtime version`，
+先对比宿主机和容器内的 `nvidia-smi`。若宿主机正常、容器报
+`GPU access blocked by the operating system`，应检查容器 GPU 设备权限。
+NVIDIA runtime hook 注入的设备权限可能在 systemd 重载后丢失，参见
+[NVIDIA 故障排查文档](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/troubleshooting.html#containers-losing-access-to-gpus-with-error-failed-to-initialize-nvml-unknown-error)。
+启用上面的 WSL2 配置后，重建容器并重新验证真实转写（会中断当前会话）：
+
+```bash
+docker compose --env-file sandbox.env up -d --force-recreate --no-build sandbox
+docker exec sandbox-lite nvidia-smi
+curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
+  -F file=@test_audio/generated-asr-en.mp3 \
+  -F request_id=asr-gpu-check
+```
+
+ASR 模型在首次转写时才加载；启动后的 `/health` 成功不能代替真实转写验证。
 
 日志同时输出到终端并滚动保存到`logs/asr.log`、`logs/intent.log`和
 `logs/sandbox.log`。默认单文件上限10 MiB、保留5份历史记录，可通过
@@ -249,9 +288,18 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 严格按场景文档映射“巡逻、巡检”为`TASK`和`["patrol", "camera"]`，“实时画面、
 查看现场”为`VIDEO_TASK`和相同技能，“可疑物识别”为`OBJECT_RECOGNITION`和
 `["camera"]`。仅本机可访问的`9005`为`runtime`，用于已建立算力会话后的Sandbox；“威吓歹徒”和“驱逐歹徒”
-均返回`executor=robot dog`、`type=movement`、`direction=expel`。任意音频都返回
+均返回`executor=robot dog`、`type=movement`，威吓的`direction=deter`，驱逐的`direction=expel`。任意音频都返回
 转写文本；任务发现未命中时为`intent.type=UNKNOWN`，运行期未命中时为
 `intent.matched=false`。
+
+意图识别优先使用规则，对命令副本做有限纠错，响应中的`text`保留实际转写。
+例如`detered`、`deterred the suspect`返回`direction=deter`；`expelled the suspect`
+返回`expel`；`move forwards/backwards`和`turn write/lift`分别匹配对应移动方向。
+`go straight`、`get forward`返回`forward`；`deters the suspect`和`deters a suspect`返回`deter`。
+相似拼写仅在明确命令模板中进行唯一的一次编辑匹配（含相邻字母交换），不纠正目标物名称或区域参数。
+否定、转述、多个冲突动作及无法可靠匹配的运行期命令返回`matched=false`；
+未命中的移动、威吓和驱逐文本不会接受Qwen猜测的动作结果。
+全部现行规则、命令别名和拒绝条件见[意图识别规则清单](意图识别规则清单.md)。
 
 `POST /v1/audio-control-actions`仅为已绑定会话保留兼容入口；它校验
 `computing_context`后调用本机`9005`，返回文本和运行期动作意图，不创建动作任务，也不控制机器狗。
@@ -262,6 +310,19 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 `language=zh`或`language=en`指定语言。可通过`ASR_INITIAL_PROMPT`、`ASR_HOTWORDS`、
 `ASR_DISCOVERY_HOST`、`ASR_DISCOVERY_PORT`、`ASR_RUNTIME_HOST`和`ASR_RUNTIME_PORT`配置监听地址。详细交接契约见
 `AR眼镜语音识别与意图接口定义.md`。
+
+ASR 启动时自动加载模型，用内存中的模拟音频完成一次 Whisper 编码解码和 VAD 初始化，
+预热完成后才开放 `9004/9005`。两个端口共享模型，每次进程启动只预热一次。
+`/health` 中的 `ready=true`、`warmedUp=true` 表示已完成预热，`warmupMs` 包含加载和预热耗时。
+预热不会生成业务转写或覆盖 `latestTranscript`；关闭 ASR 时跳过。
+
+Sandbox 启动时用与输入视频相同尺寸的空白图执行一次 YOLO 推理，提前触发 Ultralytics
+已有的内置预热，完成后开放用户接口。`28502/health` 的 `yolo.warmedUp` 和
+`yolo.warmupMs` 可用于检查；模拟检测结果不计入业务检测。关闭 YOLO 时跳过。
+模型加载或预热失败时启动失败，由 Supervisor 按现有配置重试。
+Intent 服务使用 Qwen/hybrid 时，也会在启动时加载 Qwen 并完成一次模拟生成；
+`8011/health` 的 `warmedUp` 标记完成状态。规则模式跳过；hybrid 的 Qwen 预热失败时
+保留规则回退，并在健康接口的 `lastError` 中报告错误。
 
 ## 7. 意图分类
 
@@ -411,7 +472,7 @@ Track 内切换，不重新协商。
   空间后的媒体 payload 上限。
 - 上下行连接都会在必要时主动请求关键帧，减少启动关键帧丢失导致的首帧等待。
 
-处理流固定为横屏 `640x480@30fps`。上游必须发送这个分辨率，服务不会自动缩放或
+处理流默认使用横屏 `640x480@30fps`、VP8 250 kbps 编码上限。上游必须发送这个分辨率，服务不会自动缩放或
 letterbox；YOLO 也以 `640x480`（宽×高）进行推理，输出视频保持相同分辨率。
 
 ### 8.3 YOLO 扩展接口
@@ -424,13 +485,30 @@ letterbox；YOLO 也以 `640x480`（宽×高）进行推理，输出视频保持
 cd /home/aicor/pruned_sandbox
 curl -X POST http://127.0.0.1:28502/api/v1/detection/classes \
   -H 'Content-Type: application/json' \
-  -d '{"classes":["person","dog"]}'
+  -d '{"classes":["sword"]}'
 ```
 
-默认且仅使用原通用 `yolov8s-worldv2.pt`。YOLO 模型进程内只加载一次，
+默认使用自训练的 `sword.pt`（容器路径 `/models/yolo/sword.pt`）。YOLO 模型进程内只加载一次，
 每个核心网 session ID 使用独立帧管线，多个观看端不会重复推理。未设置会话识别目标时，
-默认类别为 `person`；上游设置 `PUT /v1/recognition-targets/{compute_service_session_id}`
+默认类别为 `sword`；上游设置 `PUT /v1/recognition-targets/{compute_service_session_id}`
 后，以会话目标覆盖默认类别。
+
+光剑、剑、宝剑、长剑、玩具剑、激光剑及 `sword`、`swords`、`lightsaber`、
+`light saber`、`light-saber`、`laser sword`、`toy sword` 等名称统一映射为 `sword`。
+支持大小写、空格和常见颜色修饰词，例如“寻找红色光剑”对应模型类别 `sword`；
+识别目标接口保留用户目标名称，检测框及检测结果使用模型标签 `sword`。
+该模型只有 `sword` 类别，设置其他目标不会新增模型可识别类别。
+
+### 高时延视频链路
+
+Python WebRTC 的 consent 响应窗口为 15 秒，探测独立按 4–6 秒间隔发送，保留
+30 秒无有效响应时失联判定。此策略只作用于本服务的 PeerConnection，不修改
+全局 STUN 重传常量；实现与 Orange Python SDK 的 `rtc_policy.py` 同步维护。
+VP8 回传编码器上限为 250 kbps（H264 受库最低 500 kbps 限制），REMB 仍可下调码率，无法提高到上限以上。
+H.264/VP8 RTP payload 均限制为 1150 字节以适配 1280 字节 TUN。
+当 `VIDEO_PUBLIC_IP` 是已采集到的本机 ICE 地址时，SDP 仅公布该地址的 host 候选；
+保留 relay/srflx 候选。避免公布 Docker/代理虚拟网卡，导致 Android 在 ICE 协商中
+追加无用 VPN 路由并重建 TUN。STUN 认证直接校验原始数据，兼容 libwebrtc 扩展字段。
 
 ## 9. 测试
 
@@ -442,3 +520,14 @@ cd /home/aicor/pruned_sandbox
 测试覆盖三个独立服务、原模型默认值、无会话管理接口，以及真实 aiortc
 端到端链路（消费端先建链、占位帧、H.264 High 源 Answer、YOLO 帧无重协商
 切换、RTP payload 限制和停止媒体）。
+
+回传 RTP 按 350 kbps 的含封装预算逐包发送；RTCP 和 STUN 不经过视频限速，
+避免一个关键帧的全部 RTP 包同时进入核心网队列。检测分辨率仍为 640×480。
+
+回传视频的 RTP 时间戳按单调时钟实际经过时间生成。发送阻塞后取最新处理图像，
+时间戳跳到当前时间，避免用固定帧步长伪装成较慢的媒体时间轴。
+VP8 内部码率控制将单帧时间间隔上限设为 100 ms，避免停顿后生成过大单帧；
+RTP 仍使用实际时间戳。`rtc_video_encoded` 日志记录编码大小及耗时。
+连续 3 秒没有更新处理图像时，回传改为 `Video source stalled` 提示，
+`source_frame_available` 返回 false；恢复新帧后自动恢复图像，避免摄像头断开时
+继续把最后一帧作为实时画面发送。ICE 连接保持，摄像头 USB 重连本身仍需 producer 重新打开设备。

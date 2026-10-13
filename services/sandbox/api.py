@@ -13,6 +13,7 @@ from uuid import uuid4
 from aiohttp import ClientSession, ClientTimeout, FormData, web
 
 from services.intent.classifier import RuleIntentClassifier
+from services.video.classes import normalize_class
 
 from services.video.rtc_server import (
     ApiError,
@@ -24,15 +25,6 @@ from .control import HttpProducerControlAdapter, ProducerControlAdapter
 
 
 LOGGER = logging.getLogger("sandbox.service")
-
-# The bundled YOLO-World vocabulary recognizes the spaced form more reliably
-# than the usual one-word spelling. Keep this normalization at the API edge so
-# callers can continue to say "lightsaber" while the detector receives the
-# model-friendly prompt.
-MODEL_PROMPT_ALIASES = {
-    "lightsaber": "light saber",
-}
-
 
 @dataclass(slots=True)
 class BindingRecord:
@@ -519,47 +511,30 @@ class SandboxApi:
         )
 
     async def create_audio_control_action(self, request: web.Request) -> web.Response:
-        """Compatibility endpoint for bound sessions; it has no control side effect."""
+        """Return runtime ASR intent only. Never create or execute a control action."""
         fields, audio, filename, content_type = await self._audio_upload(request)
         request_id = fields.get("request_id", "").strip()
+        if not request_id:
+            raise ApiError(400, "invalid-request", "request_id is required")
         try:
             context_value = json.loads(fields.get("computing_context", ""))
         except (TypeError, ValueError) as exc:
-            raise ApiError(
-                400,
-                "invalid-request",
-                "computing_context must be a JSON object",
-            ) from exc
+            raise ApiError(400, "invalid-request", "computing_context must be a JSON object") from exc
         context = _context(context_value)
         async with self.lock:
             self._validate_context(context)
         if context["role"] != "consumer":
-            raise ApiError(
-                409,
-                "binding-mismatch",
-                "audio control action must use the bound consumer context",
-            )
-        if not request_id:
-            raise ApiError(400, "invalid-request", "request_id is required")
+            raise ApiError(409, "binding-mismatch", "audio control action must use the bound consumer context")
         if not self.media_engine.settings.asr_url:
             raise ApiError(503, "asr-unavailable", "ASR endpoint is not configured")
-
         if self.http is None:
             self.http = ClientSession(timeout=ClientTimeout(total=120))
         upload = FormData()
         upload.add_field("request_id", request_id)
         upload.add_field("language", fields.get("language", ""))
-        upload.add_field(
-            "file",
-            audio,
-            filename=filename,
-            content_type=content_type or "application/octet-stream",
-        )
+        upload.add_field("file", audio, filename=filename, content_type=content_type or "application/octet-stream")
         try:
-            async with self.http.post(
-                self.media_engine.settings.asr_url,
-                data=upload,
-            ) as response:
+            async with self.http.post(self.media_engine.settings.asr_url, data=upload) as response:
                 asr_body = await response.json(content_type=None)
                 if response.status != 200:
                     raise ApiError(502, "asr-failed", "ASR transcription failed")
@@ -568,24 +543,39 @@ class SandboxApi:
         except Exception as exc:
             raise ApiError(503, "asr-unavailable", "ASR service is unavailable") from exc
         transcript = asr_body.get("text") if isinstance(asr_body, dict) else None
-        if not isinstance(transcript, str) or not transcript.strip():
-            raise ApiError(422, "empty-transcription", "ASR returned no usable text")
         intent = asr_body.get("intent") if isinstance(asr_body, dict) else None
-        if not isinstance(intent, dict):
-            raise ApiError(502, "asr-failed", "ASR returned an invalid intent")
-        response = {
-            "request_id": request_id,
-            "text": transcript.strip(),
-            "intent": intent,
-        }
-        LOGGER.info(
-            "runtime audio recognized request_id=%s text=%s intent=%s",
-            request_id,
-            json.dumps(transcript.strip(), ensure_ascii=False),
-            json.dumps(intent, ensure_ascii=False, separators=(",", ":")),
-        )
-        return web.json_response(response)
+        if not isinstance(transcript, str) or not transcript.strip() or not isinstance(intent, dict):
+            raise ApiError(422, "empty-transcription", "ASR returned no usable text or intent")
+        if asr_body.get("request_id") != request_id:
+            raise ApiError(502, "asr-response-mismatch", "ASR request_id does not match")
+        # The caller owns action mapping, confirmation and A2A delivery.
+        # Returning non-matches lets it display the transcript without acting.
+        return web.json_response({"request_id": request_id, "text": transcript,
+                                  "intent": intent}, status=200)
 
+
+    async def _create_control_action_with_classified(self, payload: dict[str, Any], classified: dict[str, Any], transcription: dict[str, Any]) -> web.Response:
+        context = _context(payload.get("computing_context"))
+        operation_digest = canonical_digest(payload)
+        op_key = f"{context['binding_ref']}\0{payload['request_id']}"
+        async with self.lock:
+            previous = self.control_ops.get(op_key)
+            if previous is not None:
+                _verify_retry(previous, operation_digest)
+                return web.json_response(_action_response(self.actions[previous.response['action_id']]), status=202)
+            binding = self._validate_context(context)
+            _validate_action_target(binding, payload.get("target"))
+        action, parameters = await self._control_action(payload, classified)
+        _validate_action_role(action, payload.get("target"))
+        control = ControlAction(request_id=payload["request_id"], context=context, action_id=f"action-{uuid4().hex}", status="ACCEPTED", normalized_action=action, normalized_parameters=parameters, result=None, cause="", digest=operation_digest, control_triggered=True, transcription=transcription)
+        response = _action_response(control)
+        async with self.lock:
+            self.actions[control.action_id] = control
+            self.control_ops[op_key] = StoredOperation(operation_digest, response)
+            task = asyncio.create_task(self._execute_control_action(control, binding), name=f"control-action:{control.action_id}")
+            self.action_tasks[control.action_id] = task
+            task.add_done_callback(lambda _: self.action_tasks.pop(control.action_id, None))
+        return web.json_response(response, status=202)
     async def _create_control_action(
         self,
         payload: dict[str, Any],
@@ -817,7 +807,9 @@ class SandboxApi:
         if isinstance(i18n, dict):
             label = str(i18n.get("zh") or label)
             prompt = str(i18n.get("en") or prompt)
-        prompt = MODEL_PROMPT_ALIASES.get(prompt.casefold(), prompt)
+        prompt = normalize_class(prompt)
+        if normalize_class(label) == "sword":
+            prompt = "sword"
         return label, prompt
 
     async def _control_action(
@@ -910,7 +902,6 @@ def _normalize_direction(value: Any) -> str | None:
         "turn_left": "left",
         "right": "right",
         "turn_right": "right",
-        "wave": "wave",
     }.get(normalized)
 
 

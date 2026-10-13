@@ -43,7 +43,7 @@ class ServiceSettingsTest(TestCase):
         self.assertEqual("runtime", asr.intent_profile)
         self.assertTrue(video.yolo_enabled)
         self.assertEqual((640, 480), (video.video_width, video.video_height))
-        self.assertEqual(30.0, video.video_fps)
+        self.assertEqual(20.0, video.video_fps)
         self.assertEqual(1150, video.h264_rtp_payload_bytes)
         self.assertEqual("", video.management_token)
         self.assertEqual(

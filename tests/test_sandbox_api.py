@@ -8,7 +8,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from services.video.rtc_server import ApiError
-from services.sandbox.api import SandboxApi, canonical_digest
+from services.sandbox.api import SandboxApi, canonical_digest, _normalize_direction
 from services.sandbox.control import ActionOutcome
 from services.sandbox.main import (
     RUNTIME_KEY,
@@ -82,6 +82,10 @@ class FakeProducerControlAdapter:
 
 
 class SandboxPlaneIsolationTest(IsolatedAsyncioTestCase):
+    def test_removed_direction_is_not_mapped(self) -> None:
+        self.assertIsNone(_normalize_direction("wave"))
+        self.assertEqual("forward", _normalize_direction("forward"))
+
     async def test_management_and_user_routes_are_isolated(self) -> None:
         settings = VideoSettings.from_env()
         runtime = VideoRuntime.build(settings)
@@ -180,6 +184,26 @@ class SandboxContractApiTest(IsolatedAsyncioTestCase):
             json=self.bind_body,
             headers={"Authorization": "Bearer secret"},
         )
+
+    async def test_recognition_targets_map_sword_descriptions(self) -> None:
+        response = await self.bind()
+        self.assertEqual(200, response.status)
+        for index, text in enumerate(("寻找光剑", "寻找红色光剑", "识别剑", "find the light saber", "find SWORD")):
+            with self.subTest(text=text):
+                response = await self.client.put(
+                    "/v1/recognition-targets/css-1",
+                    json={
+                        "request_id": f"sword-target-{index}",
+                        "computing_context": self.context,
+                        "input": {"type": "TEXT", "text": text},
+                    },
+                )
+                target = await response.json()
+                self.assertEqual(200, response.status, target)
+                self.assertEqual("sword", target["target"]["prompt"])
+                self.assertEqual("sword", self.engine.targets["binding-1"])
+                if text == "寻找红色光剑":
+                    self.assertEqual("红色光剑", target["target"]["label"])
 
     async def test_binding_media_recognition_control_is_disabled_and_unbind(self) -> None:
         response = await self.bind()

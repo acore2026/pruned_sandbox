@@ -23,7 +23,7 @@ LOGGER = logging.getLogger("sandbox.asr")
 
 
 class SpeechRecognizer:
-    """惰性加载 faster-whisper，并限制并发 GPU 推理数。"""
+    """启动时加载并预热 faster-whisper，限制并发 GPU 推理数。"""
 
     def __init__(
         self,
@@ -34,14 +34,18 @@ class SpeechRecognizer:
         self._model_factory = model_factory
         self._model: Any | None = None
         self._load_lock = threading.Lock()
+        self._warmup_lock = threading.Lock()
         self._semaphore = asyncio.Semaphore(settings.concurrency)
         self.loaded = False
+        self.warmed_up = False
+        self.warmup_ms: int | None = None
         self.last_error: str | None = None
         self.latest_transcript: dict[str, Any] | None = None
 
     def _load_model(self) -> Any:
         if self._model is not None:
             return self._model
+
         with self._load_lock:
             if self._model is not None:
                 return self._model
@@ -64,6 +68,53 @@ class SpeechRecognizer:
             self.last_error = None
             return self._model
 
+    async def warmup(self) -> None:
+        if not self.settings.enabled:
+            return
+        async with self._semaphore:
+            if not self.warmed_up:
+                await asyncio.to_thread(self._warmup_sync)
+
+    def _warmup_sync(self) -> None:
+        import numpy as np
+
+        with self._warmup_lock:
+            if self.warmed_up:
+                return
+            started = time.perf_counter()
+            try:
+                model = self._load_model()
+                audio = np.zeros(16000, dtype=np.float32)
+                # VAD would discard silence before Whisper sees it. Bypass it for
+                # the GPU pass and consume the lazy iterator to run the decoder.
+                segments, _ = model.transcribe(
+                    audio,
+                    language=self.settings.language,
+                    task="transcribe",
+                    beam_size=self.settings.beam_size,
+                    vad_filter=False,
+                    initial_prompt=None,
+                    hotwords=None,
+                    temperature=0.0,
+                    max_new_tokens=16,
+                )
+                list(segments)
+                # Also initialize Silero VAD, which real requests use. Its silent
+                # output is discarded and never becomes a business transcript.
+                segments, _ = model.transcribe(
+                    audio, language=self.settings.language, task="transcribe",
+                    beam_size=self.settings.beam_size, vad_filter=True,
+                    initial_prompt=None, hotwords=None,
+                    temperature=0.0, max_new_tokens=16,
+                )
+                list(segments)
+            except Exception as exc:
+                self.last_error = str(exc)
+                raise
+            self.warmup_ms = int((time.perf_counter() - started) * 1000)
+            self.warmed_up = True
+            self.last_error = None
+
     async def transcribe(
         self,
         audio_path: Path,
@@ -77,6 +128,7 @@ class SpeechRecognizer:
     ) -> dict[str, Any]:
         if not self.settings.enabled:
             raise RuntimeError("ASR service is disabled")
+        await self.warmup()
         async with self._semaphore:
             return await asyncio.to_thread(
                 self._transcribe_sync,
@@ -168,11 +220,13 @@ class SpeechRecognizer:
         return result
 
     def health(self) -> dict[str, Any]:
-        ready = self.settings.enabled and self.last_error is None
+        ready = self.settings.enabled and self.warmed_up and self.last_error is None
         if not self.settings.enabled:
             status = "disabled"
         elif self.last_error is not None:
             status = "error"
+        elif not self.warmed_up:
+            status = "warming_up"
         else:
             status = "ready"
         return {
@@ -182,6 +236,8 @@ class SpeechRecognizer:
             "service": "asr",
             "enabled": self.settings.enabled,
             "loaded": self.loaded,
+            "warmedUp": self.warmed_up,
+            "warmupMs": self.warmup_ms,
             "model": self.settings.model,
             "modelName": self.settings.model,
             "device": self.settings.device,

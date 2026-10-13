@@ -9,8 +9,8 @@ from services.intent.config import IntentSettings
 from services.video.config import VideoSettings
 
 
-class OriginalModelDefaultsTest(TestCase):
-    def test_original_models_are_the_runtime_defaults(self) -> None:
+class ModelDefaultsTest(TestCase):
+    def test_trained_sword_model_is_the_runtime_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             asr = AsrSettings.from_env()
             intent = IntentSettings.from_env()
@@ -21,7 +21,8 @@ class OriginalModelDefaultsTest(TestCase):
         self.assertEqual("float16", asr.compute_type)
         self.assertEqual("hybrid", intent.backend)
         self.assertEqual("/models/intent/Qwen2.5-0.5B-Instruct", intent.model)
-        self.assertEqual("/models/yolo/yolov8s-worldv2.pt", video.yolo_model)
+        self.assertEqual("/models/yolo/sword.pt", video.yolo_model)
+        self.assertEqual(("sword",), video.yolo_classes)
         self.assertEqual(0.3, video.yolo_confidence)
         self.assertEqual(0.4, video.yolo_iou)
 

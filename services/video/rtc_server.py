@@ -8,20 +8,21 @@ from typing import Any
 
 from aiohttp import web
 from aiortc import (
-    RTCPeerConnection,
     RTCRtpReceiver,
     RTCRtpSender,
     RTCSessionDescription,
 )
 from aiortc.codecs import CODECS
 from aiortc.codecs import h264 as aiortc_h264
+from aiortc.codecs import vpx as aiortc_vpx
 from aiortc.mediastreams import MediaStreamTrack
 from aiortc.rtcrtpparameters import RTCRtcpFeedback, RTCRtpCodecParameters
 from av import VideoFrame
 
+from .rtc_policy import HighLatencyPeerConnection as RTCPeerConnection, limit_sender_bitrate
 from .config import VideoSettings
 from .detector import YoloDetector
-from .ice import build_rtc_configuration, wait_for_ice_gathering
+from .ice import build_rtc_configuration, public_host_candidates, wait_for_ice_gathering
 from .pipeline import FramePipeline
 
 
@@ -367,6 +368,7 @@ class OrangeVideoServer:
         # Bound H.264 FU-A RTP payloads so the encrypted UDP/IP packet remains
         # below the 1280-byte Android TUN MTU, matching mock-video-server.
         aiortc_h264.PACKET_MAX = settings.h264_rtp_payload_bytes
+        aiortc_vpx.PACKET_MAX = settings.h264_rtp_payload_bytes
 
     async def health(self, _: web.Request) -> web.Response:
         return web.json_response(
@@ -414,6 +416,9 @@ class OrangeVideoServer:
                                 "packets_sent": connection.packets_sent,
                                 "bytes_sent": connection.bytes_sent,
                                 "codec": connection.codec,
+                                "connection_state": connection.pc.connectionState,
+                                "ice_connection_state": connection.pc.iceConnectionState,
+                                "dtls_states": [item.sender.transport.state for item in connection.pc.getTransceivers()],
                                 "first_frame_sent": connection.first_frame_logged,
                                 "first_source_frame_sent": connection.first_source_frame_logged,
                                 "keyframes_requested": connection.keyframes_requested,
@@ -571,7 +576,7 @@ class OrangeVideoServer:
             session.source_ready_task = asyncio.create_task(wait_for_first_frame())
             return StandardMediaConnection("producer", pc), {
                 "type": local.type,
-                "sdp": local.sdp,
+                "sdp": public_host_candidates(local.sdp, self.settings.public_ip),
             }
         except Exception:
             if session.producer_pc is pc:
@@ -592,6 +597,7 @@ class OrangeVideoServer:
         @pc.on("connectionstatechange")
         async def on_connection_state_change() -> None:
             consumer.state = pc.connectionState
+            LOGGER.info("rtc_state session=%s role=consumer connection=%s ice=%s dtls=%s", session.session_id, pc.connectionState, pc.iceConnectionState, [item.sender.transport.state for item in pc.getTransceivers()])
             if pc.connectionState == "connected":
                 await state_callback("consumer", True, "")
             elif pc.connectionState in {"failed", "closed"}:
@@ -613,6 +619,7 @@ class OrangeVideoServer:
                     consumer,
                 )
             )
+            limit_sender_bitrate(consumer.sender)
             transceiver = next(
                 item
                 for item in pc.getTransceivers()
@@ -629,7 +636,7 @@ class OrangeVideoServer:
             )
             return StandardMediaConnection("consumer", pc, consumer), {
                 "type": local.type,
-                "sdp": local.sdp,
+                "sdp": public_host_candidates(local.sdp, self.settings.public_ip),
             }
         except Exception:
             if consumer in session.consumer_connections:
@@ -713,7 +720,7 @@ class OrangeVideoServer:
                     {
                         "session_id": session.session_id,
                         "state": session.state,
-                        "sdp_offer": {"type": local.type, "sdp": local.sdp},
+                        "sdp_offer": {"type": local.type, "sdp": public_host_candidates(local.sdp, self.settings.public_ip)},
                     }
                 )
             except Exception:
@@ -826,6 +833,7 @@ class OrangeVideoServer:
                     connection,
                 )
             )
+            limit_sender_bitrate(connection.sender)
             consumer_transceiver = next(
                 transceiver
                 for transceiver in pc.getTransceivers()
@@ -859,7 +867,7 @@ class OrangeVideoServer:
                     if session.pipeline.first_frame.is_set()
                     else "SOURCE_PENDING"
                 ),
-                "sdp_answer": {"type": local.type, "sdp": local.sdp},
+                "sdp_answer": {"type": local.type, "sdp": public_host_candidates(local.sdp, self.settings.public_ip)},
             }
         )
 

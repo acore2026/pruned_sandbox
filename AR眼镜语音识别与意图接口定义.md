@@ -158,9 +158,25 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 
 ### 5.2 动作意图响应示例
 
-当前先保留一个“驱逐歹徒”的消息示例。语音内容统一使用英文；`direction` 暂时使用
-`expel`，后续再由映射表转换为具体设备动作。`executor`、`type`、`direction`、
-`matched`和`backend`均需保留。
+威吓与驱逐分别返回不同的 `intent.direction`，两者的 `intent.type` 均保持为
+`movement`。`executor`、`type`、`direction`、`matched` 和 `backend` 均需保留。
+以下使用英文转写示例；中文语音遵循相同映射，`text` 保留实际转写文本。
+
+意图规则允许有限的 ASR 命令纠错：`detered`、`deterred the suspect` 均识别为威吓，
+返回 `direction=deter`；`expelled the suspect` 返回 `direction=expel`。
+`turn write/lift`、`move forwards/backwards` 按对应方向识别。纠错只作用于意图判断副本，
+`text` 始终保留转写结果，不纠正目标物名称和区域参数。否定、转述、冲突动作和无法可靠匹配的
+命令返回 `matched=false`，Qwen 不补猜未匹配的运行期动作。
+
+`go straight`、`get forward` 均返回 `direction=forward`；`deters the suspect`、
+`deters a suspect` 均返回 `direction=deter`。
+
+| 语音含义 | 中文示例 | 英文示例 | `intent.type` | `intent.direction` |
+| --- | --- | --- | --- | --- |
+| 威吓 | 威吓歹徒 | `Deter the suspect.` | `movement` | `deter` |
+| 驱逐 | 驱逐歹徒 | `Expel the suspect.` | `movement` | `expel` |
+
+驱逐（保持现有响应结构和 `expel` 值）：
 
 ```json
 {
@@ -176,7 +192,25 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 }
 ```
 
-普通移动语音按以下方向返回 `movement` 意图；语音内容仍使用英文：
+威吓（`direction` 使用 `deter`，不再合并为 `expel`）：
+
+```json
+{
+  "request_id": "asr-action-007",
+  "text": "Deter the suspect.",
+  "intent": {
+    "executor": "robot dog",
+    "type": "movement",
+    "direction": "deter",
+    "matched": true,
+    "backend": "rules"
+  }
+}
+```
+
+`backend` 按实际识别来源返回 `rules` 或 `qwen`，不因威吓、驱逐类别而固定。
+
+普通移动语音按以下方向返回 `movement` 意图；语音示例使用英文：
 
 | 语音示例 | `intent.type` | `intent.direction` |
 | --- | --- | --- |
@@ -279,9 +313,9 @@ Sandbox到此结束处理，不调用机器狗接口。眼镜端根据意图自�
 | 独立ASR任务发现 | `parameters.area` | `TASK`时的巡逻区域；未识别时为空对象或省略`area` |
 | 运行期动作 | `executor` | 命中时固定为`robot dog`；未命中时为`null` |
 | 运行期动作 | `type` | 命中时为`movement`；未命中时为`other` |
-| 运行期动作 | `direction` | 普通移动时为`forward`、`backward`、`left`或`right`；“驱逐歹徒”暂时为`expel` |
+| 运行期动作 | `direction` | 普通移动时为`forward`、`backward`、`left`或`right`；威吓为`deter`，驱逐为`expel`，两者必须区分 |
 | 运行期动作 | `matched` | 是否命中动作候选意图 |
-| 运行期动作 | `backend` | 实际意图识别后端，例如`qwen` |
+| 运行期动作 | `backend` | 实际意图识别后端：`rules`或`qwen` |
 
 接口不返回`control_triggered`、`normalized_action`或机器狗设备动作名。`Scrape`和
 `FrontPounce`由眼镜端构造后续A2A `TASK`时确定，不是Sandbox ASR接口返回值。
@@ -340,14 +374,16 @@ curl --noproxy '*' -X POST \
 4. 运行期动作只有在`intent.matched=true`且`intent.type=movement`时才构造A2A `TASK`；
 5. 重试时沿用同一个`request_id`，新的一次用户录音使用新的`request_id`；
 6. Sandbox不会因为任何识别结果直接控制机器狗。
+7. 眼镜端根据 `intent.direction` 区分威吓 `deter` 与驱逐 `expel`，分别映射后续业务动作，不得将两者合并；新增 `deter` 不改变 Sandbox 仅返回转写和意图的职责。
 
-## 10. 当前实现调整项
+## 10. 运行期语音动作实现状态
 
-本文描述的是目标接口契约。现有`pruned_sandbox`代码还需要完成以下调整后才能按本文联调：
+**已实现并部署：** 威吓返回 `intent.direction=deter`，驱逐返回 `intent.direction=expel`，两者均为 `intent.type=movement`。Sandbox 只返回文本和意图，不创建或执行控制动作。
 
-- 删除运行期音频接口触发机器狗控制适配器的逻辑；
-- 在独立ASR模式实现第4.1节的三类映射：`TASK`/`VIDEO_TASK`返回`["patrol", "camera"]`，`OBJECT_RECOGNITION`返回`["camera"]`；
-- 将普通移动返回为`executor=robot dog`、`type=movement`、`direction=forward`/`backward`/`left`/`right`；“驱逐歹徒”暂时返回`direction=expel`，后续再接入动作映射表；
-- 按第4、5节分别返回任务和动作意图未命中结构，同时始终返回转写文本；
-- 停止向眼镜端返回`control_triggered`等控制执行状态字段。
-- 将当前`session_id`、`task_id`等内部关联字段收敛为对外唯一的`request_id`。
+当前运行期音频接口返回 `{request_id, text, intent}`，不创建或执行控制动作。
+ASR 没有命中时返回 `matched=false`，不得把未知方向默认映射为前进。
+眼镜校验 `request_id`、`matched`、`executor`、`type` 和 `direction` 后，才构造 A2A `robot_action`；狗端再次校验显式 `confirmed=true`，然后映射 `expel` 到 `/front-pounce`。高风险驱逐需眼镜端单独确认，确认超时或取消均不下发。
+
+语言字段省略时走 ASR 自动语言检测。支持英语 `Move forward/backward`、`Turn left/right`、`Expel the suspect`，以及中文对应动作。按本次新增约定，`Deter the suspect`／“威吓歹徒”返回 `deter`；`Expel the suspect`／“驱逐歹徒”继续返回 `expel`。英文确认使用 `confirm/yes/proceed`，取消使用 `cancel/no`。转写文本仅用于显示，不作为动作执行的回退输入。
+
+机器狗执行结果通过 `dog_action_completed` 或 `dog_action_failed` 回传；眼镜只接受当前组网成员的结果并显示状态。Sandbox 不直接调用狗端动作接口。

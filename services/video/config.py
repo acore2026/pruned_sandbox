@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from .classes import normalize_classes
+
 
 def _bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -52,8 +54,8 @@ def _csv(name: str, default: tuple[str, ...] = ()) -> tuple[str, ...]:
 
 
 def _model_path() -> str:
-    value = os.getenv("YOLO_MODEL", "/models/yolo/yolov8s-worldv2.pt").strip()
-    candidate = value or "/models/yolo/yolov8s-worldv2.pt"
+    value = os.getenv("YOLO_MODEL", "/models/yolo/sword.pt").strip()
+    candidate = value or "/models/yolo/sword.pt"
     if "/" in candidate:
         return candidate
     if not candidate.endswith(".pt"):
@@ -113,10 +115,10 @@ class VideoSettings:
             yolo_confidence=_float("YOLO_CONFIDENCE", 0.3),
             yolo_iou=_float("YOLO_IOU", 0.4),
             yolo_image_size=_yolo_image_size(),
-            yolo_classes=_csv("YOLO_CLASSES", ("person",)),
+            yolo_classes=tuple(normalize_classes(_csv("YOLO_CLASSES", ("sword",)))),
             video_width=_int("VIDEO_WIDTH", 640, minimum=2),
             video_height=_int("VIDEO_HEIGHT", 480, minimum=2),
-            video_fps=_float("VIDEO_FPS", 30.0, minimum=1.0),
+            video_fps=min(20.0, _float("VIDEO_FPS", 20.0, minimum=1.0)),
             h264_rtp_payload_bytes=_h264_rtp_payload_bytes(),
             rtc_ice_servers=_csv("WEBRTC_ICE_SERVERS"),
             rtc_ice_username=os.getenv("WEBRTC_ICE_USERNAME", "").strip(),

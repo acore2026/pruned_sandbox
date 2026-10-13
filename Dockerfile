@@ -23,7 +23,8 @@ ENV LANG=C.UTF-8 \
     ASR_COMPUTE_TYPE=float16 \
     INTENT_BACKEND=hybrid \
     INTENT_MODEL=/models/intent/Qwen2.5-0.5B-Instruct \
-    YOLO_MODEL=/models/yolo/yolov8s-worldv2.pt \
+    YOLO_MODEL=/models/yolo/sword.pt \
+    YOLO_CLASSES=sword \
     YOLO_CONFIG_DIR=/tmp/ultralytics \
     YOLO_DEVICE=0 \
     LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH}
@@ -57,8 +58,8 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
         --extra-index-url "${TORCH_INDEX_URL}" \
     && pip install -r requirements.txt --index-url "${PYPI_MIRROR_URL}"
 
-# 三套模型和 CLIP 权重均在运行期由 docker-compose.yml 以只读卷挂载。
-# 因此模型权重不会进入镜像层，也不会在运行阶段联网下载；clip Python 包随镜像提供。
+# 三套模型在运行期由 docker-compose.yml 以只读卷挂载。
+# sword.pt 使用已训练的类别及文本特征，不需要额外的 CLIP 权重。
 
 COPY services /app/services
 COPY services/video/vendor/clip /opt/venv/lib/python3.12/site-packages/clip

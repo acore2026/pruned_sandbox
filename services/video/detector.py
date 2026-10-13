@@ -6,11 +6,12 @@ from typing import Any
 
 import numpy as np
 
+from .classes import normalize_classes
 from .config import VideoSettings
 
 
 class YoloDetector:
-    """Ultralytics YOLO 适配器，模型在第一帧时加载。"""
+    """Ultralytics YOLO 适配器，启动时通过一次推理触发内置预热。"""
 
     def __init__(self, settings: VideoSettings, model_factory: Any | None = None) -> None:
         self.settings = settings
@@ -18,12 +19,34 @@ class YoloDetector:
         self._model: Any | None = None
         self._load_lock = threading.Lock()
         self._inference_lock = threading.Lock()
-        self._requested_classes = list(settings.yolo_classes)
+        self._warmup_lock = threading.Lock()
+        self._requested_classes = normalize_classes(settings.yolo_classes)
         self._dynamic_classes = False
         self.loaded = False
+        self.warmed_up = False
+        self.warmup_ms: int | None = None
         self.last_error: str | None = None
         self.last_inference_ms = 0
         self.last_detections: list[dict[str, Any]] = []
+
+    def warmup(self) -> None:
+        if not self.settings.yolo_enabled:
+            return
+        with self._warmup_lock:
+            if self.warmed_up:
+                return
+            started = time.perf_counter()
+            image = np.zeros(
+                (self.settings.video_height, self.settings.video_width, 3),
+                dtype=np.uint8,
+            )
+            # predict initializes the Ultralytics predictor and runs its
+            # existing model.warmup. Exercise postprocessing as well.
+            self.process(image)
+            self.last_detections = []
+            self.last_inference_ms = 0
+            self.warmup_ms = int((time.perf_counter() - started) * 1000)
+            self.warmed_up = True
 
     def _load_model(self) -> Any:
         if self._model is not None:
@@ -66,6 +89,12 @@ class YoloDetector:
         mover(device)
 
     def _try_set_dynamic_classes(self, classes: list[str]) -> None:
+        # A plain YOLO wrapper can forward set_classes to a trained WorldModel.
+        # Keep that checkpoint's cached text features and fixed class IDs intact;
+        # only explicit open-vocabulary wrappers should replace their vocabulary.
+        if not callable(getattr(type(self._model), "set_classes", None)):
+            self._dynamic_classes = False
+            return
         setter = getattr(self._model, "set_classes", None)
         if not classes or not callable(setter):
             self._dynamic_classes = False
@@ -77,7 +106,7 @@ class YoloDetector:
             self._dynamic_classes = False
 
     def set_classes(self, classes: list[str]) -> list[str]:
-        normalized = list(dict.fromkeys(item.strip() for item in classes if item.strip()))
+        normalized = normalize_classes(classes)
         self._requested_classes = normalized
         if self._model is not None:
             with self._inference_lock:
@@ -96,7 +125,9 @@ class YoloDetector:
         try:
             with self._inference_lock:
                 requested_classes = (
-                    list(classes) if classes is not None else list(self._requested_classes)
+                    normalize_classes(classes)
+                    if classes is not None
+                    else list(self._requested_classes)
                 )
                 # YOLO-World stores its vocabulary on the model. Set it while
                 # holding the inference lock so concurrent bindings cannot see
@@ -164,6 +195,8 @@ class YoloDetector:
         return {
             "enabled": self.settings.yolo_enabled,
             "loaded": self.loaded,
+            "warmedUp": self.warmed_up,
+            "warmupMs": self.warmup_ms,
             "model": self.settings.yolo_model,
             "device": self.settings.yolo_device,
             "classes": list(self._requested_classes),
