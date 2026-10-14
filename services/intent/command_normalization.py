@@ -2,6 +2,36 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+
+
+MOVEMENT_KEYWORDS = {
+    "forward": ("forward", "straight", "向前", "前进"),
+    "backward": ("backward", "back", "向后", "后退", "退后"),
+    "left": ("left", "向左", "左转"),
+    "right": ("right", "向右", "右转"),
+    "happy": ("happy",),
+}
+DEFENSE_KEYWORDS = {
+    "deter": ("deter", "threaten", "intimidate", "威吓", "威慑"),
+    "expel": ("expel", "drive away", "驱逐"),
+}
+
+
+@lru_cache(maxsize=64)
+def keyword_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
+    alternatives = []
+    for keyword in sorted(keywords, key=len, reverse=True):
+        escaped = re.escape(keyword).replace(r"\ ", r"[^\w]+")
+        if not re.search(r"[\u4e00-\u9fff]", keyword):
+            escaped = r"(?<![a-z0-9_])" + escaped + r"(?![a-z0-9_])"
+        alternatives.append(escaped)
+    return re.compile("|".join(alternatives), re.IGNORECASE)
+
+
+def keyword_arguments(text: str, keywords: dict[str, tuple[str, ...]]) -> set[str]:
+    return {argument for argument, words in keywords.items()
+            if keyword_pattern(words).search(text)}
 
 
 WORD_ALIASES = {
@@ -19,34 +49,28 @@ NEGATION = re.compile(
     r"|不要|(?:^|[，。！？\s]|请|机器狗)别|禁止|不许|不用|不能|取消|停止",
     re.IGNORECASE,
 )
-NARRATIVE = re.compile(
-    r"\b(?:yesterday|was|were|said|says|meaning|means|meant|example)\b"
-    r"|昨天|说过|说了|是什么意思|比如|例如",
-    re.IGNORECASE,
-)
 REQUEST_PREFIX = re.compile(
     r"^(?:(?:please|can you|could you|would you)\s+)*"
     r"(?:(?:ask|tell|send)\s+(?:the\s+)?(?:robot\s+)?dog\s+to\s+)?",
     re.IGNORECASE,
 )
 COMMAND_WORDS = ("deter", "expel", "threaten", "intimidate", "patrol", "inspect")
-CONFLICTING_ACTION = re.compile(
-    r"\b(?:and|or|then)\s+(?:(?:please|also)\s+)?"
-    r"(?:deter(?:s|ed|red|ring|ing)?|expel(?:led|ling)?|threaten(?:ed)?|"
-    r"intimidat(?:e|ed)|drive away|move|go|get forward|turn|forward|backward|left|right|"
-    r"happy|patrol|inspect)\b"
-    r"|(?:还是|或者|然后|并且|同时)(?:威吓|威慑|驱逐|前进|后退|左转|右转|巡逻|巡检)",
-    re.IGNORECASE,
-)
 # These real words must not be changed just because they are one edit away.
 FUZZY_EXCLUSIONS = {"defer"}
 
 
 def command_is_blocked(text: str) -> bool:
-    """Negated, reported or conflicting actions cannot become one action."""
+    """Keep negation and conflicting directions out of keyword commands."""
     text = text.replace("’", "'")
-    return bool(NEGATION.search(text) or NARRATIVE.search(text)
-                or CONFLICTING_ACTION.search(text))
+    text = normalize_word_aliases(text)
+    return bool(NEGATION.search(text)
+                or len(keyword_arguments(text, MOVEMENT_KEYWORDS)) > 1
+                or len(keyword_arguments(text, DEFENSE_KEYWORDS)) > 1)
+
+
+def normalize_word_aliases(text: str) -> str:
+    return keyword_pattern(tuple(WORD_ALIASES)).sub(
+        lambda match: WORD_ALIASES[match[0].lower()], text)
 
 
 def _one_edit_apart(left: str, right: str) -> bool:
@@ -67,12 +91,12 @@ def _one_edit_apart(left: str, right: str) -> bool:
 def normalize_command_text(text: str) -> str:
     """Correct known variants and a unique one-edit command verb in templates.
 
-    Object names and area slots are never spell-corrected. Homophones such as
-    write/lift are accepted only after a movement verb, never as bare words.
+    Explicit aliases apply anywhere; fuzzy corrections remain restricted to
+    the existing templates. Displayed transcripts are never changed.
     """
     if command_is_blocked(text):
         return text
-    cleaned = " ".join(text.strip().split()).strip(" .!?，。！？")
+    cleaned = normalize_word_aliases(" ".join(text.strip().split()).strip(" .!?，。！？"))
     if re.search(r"[\u4e00-\u9fff]", cleaned):
         return cleaned
     cleaned = cleaned.lower()
@@ -92,11 +116,8 @@ def normalize_command_text(text: str) -> str:
     words = command.split()
     if not words:
         return text
-    # Only the leading action verb or a direction in a short movement
-    # template may be corrected. Leave the rest of the sentence intact.
-    words[0] = WORD_ALIASES.get(words[0], words[0])
+    # Fuzzy corrections are limited to short command templates.
     if len(words) == 2 and words[0] in {"move", "go", "step", "turn"}:
-        words[1] = WORD_ALIASES.get(words[1], words[1])
         directions = ("forward", "backward", "left", "right")
         if words[1] not in directions and len(words[1]) >= 4:
             matches = [word for word in directions if _one_edit_apart(words[1], word)]

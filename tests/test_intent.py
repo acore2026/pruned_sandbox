@@ -129,28 +129,26 @@ class RuleIntentClassifierTest(TestCase):
                 result = self.classifier.classify(command)
                 self.assertEqual(("other", ""), (result.intent, result.argument))
 
-    def test_negated_reported_and_ambiguous_commands_are_not_actions(self) -> None:
+    def test_negated_and_conflicting_commands_are_not_actions(self) -> None:
         for command in (
             "Do not deter the suspect", "Don't detered the suspect",
             "Don’t deterred the suspect", "Never expel the suspect",
             "不要威吓歹徒", "别驱逐歹徒", "取消巡逻A区域",
-            "Yesterday we deterred the suspect", "The dog was expelled",
-            "We patrol area A", "What does detered mean?",
             "deter or expel the suspect", "detered and expel the suspect",
-            "go straight or get forward", "deters a suspect and expel the suspect",
+            "deters a suspect and expel the suspect",
             "Don't go straight", "Don't get forward", "Don't deters a suspect",
             "Don't wave", "不要挥手", "Yesterday we said hello", "The wave is high",
-            "turn left or right", "patrol area A and deter the suspect",
+            "turn left or right", "forward backward", "left右转",
+            "forwards backwards", "detered expelled", "happy forward",
             "威吓歹徒然后驱逐歹徒",
             "write", "lift", "detour", "defer the suspect",
-            "detar", "detrxxx the suspect", "I like detered",
+            "detar", "detrxxx the suspect",
         ):
             with self.subTest(command=command):
                 self.assertEqual("other", self.classifier.classify(command).intent)
 
-    def test_object_slots_are_not_spell_corrected_as_commands(self) -> None:
+    def test_fuzzy_corrections_do_not_modify_object_slots(self) -> None:
         for command, intent, argument in (
-            ("find the detered doll", "find_object", "detered doll"),
             ("find the stop sign", "find_object", "stop sign"),
             ("find the no entry sign", "find_object", "no entry sign"),
             ("grab the forword cup", "grab", "forword cup"),
@@ -160,6 +158,70 @@ class RuleIntentClassifierTest(TestCase):
         ):
             with self.subTest(command=command):
                 result = self.classifier.classify(command)
+                self.assertEqual((intent, argument), (result.intent, result.argument))
+
+    def test_keywords_match_anywhere_without_complete_commands(self) -> None:
+        for text, intent, argument in (
+            ("We patrol area A", "patrol", "A"),
+            ("The next task is PATROL!", "patrol", ""),
+            ("We need inspection of zone B7 today", "patrol", "B7"),
+            ("今天去A区域进行巡检吧", "patrol", "A区域"),
+            ("先去这里，之后巡逻", "patrol", ""),
+            ("Could you move forward a little now", "movement", "forward"),
+            ("We should head straight through here", "movement", "forward"),
+            ("A little back please", "movement", "backward"),
+            ("这里需要向左走一点", "movement", "left"),
+            ("The word is HAPPY", "movement", "happy"),
+            ("Please help me detered that suspect now", "defense", "deter"),
+            ("这里需要detered嫌疑人", "defense", "deter"),
+            ("Yesterday we deterred the suspect", "defense", "deter"),
+            ("What does detered mean?", "defense", "deter"),
+            ("The dog was expelled", "defense", "expel"),
+            ("在这里威慑一下嫌疑人", "defense", "deter"),
+            ("I said drive-away the suspect now", "defense", "expel"),
+            ("This video is live", "video_task", ""),
+            ("Please enable CAMERA now", "video_task", ""),
+            ("帮我看看这里的实时画面吧", "video_task", ""),
+            ("We need to recognize the threat", "object_recognition", ""),
+            ("recognition", "object_recognition", ""),
+            ("detect", "object_recognition", ""),
+            ("这里有可疑物", "object_recognition", ""),
+            ("Now locate the yellow dog", "find_object", "yellow dog"),
+            ("find", "find_object", ""),
+            ("identify", "find_object", ""),
+            ("请现在寻找红色玩偶", "find_object", "red doll"),
+            ("Please now grab the yellow dog", "grab", "yellow dog"),
+            ("I want to pick-up a red cup", "grab", "red cup"),
+            ("请现在抓取红色杯子", "grab", "red cup"),
+            ("比如 patrol", "patrol", ""),
+        ):
+            with self.subTest(text=text):
+                result = self.classifier.classify(text)
+                self.assertEqual((intent, argument), (result.intent, result.argument))
+
+    def test_keyword_boundaries_do_not_match_parts_of_english_words(self) -> None:
+        for text in ("leftover", "bright", "background", "straightforward", "findings",
+                     "grabber", "patroller", "expeller", "deterrent", "cameraman",
+                     "videos", "recognizable", "deteredness", "patrol_area"):
+            with self.subTest(text=text):
+                self.assertEqual("other", self.classifier.classify(text).intent)
+
+    def test_repeated_synonyms_are_one_action_and_intents_use_priority(self) -> None:
+        for text, intent, argument in (
+            ("go straight or get forward", "movement", "forward"),
+            ("forward forwards 前进", "movement", "forward"),
+            ("deter detered threaten 威慑", "defense", "deter"),
+            ("patrol area A and deter the suspect", "patrol", "A"),
+            ("patrol and move forward", "movement", "forward"),
+            ("patrol and video", "patrol", ""),
+            ("video recognize deter grab find", "video_task", ""),
+            ("recognize deter grab find", "object_recognition", ""),
+            ("find the detered doll", "defense", "deter"),
+            ("grab and find a red cup", "grab", "and find a red cup"),
+            ("巡逻A区域然后威慑嫌疑人", "patrol", "A区域"),
+        ):
+            with self.subTest(text=text):
+                result = self.classifier.classify(text)
                 self.assertEqual((intent, argument), (result.intent, result.argument))
 
     def test_classifies_grab_without_target(self) -> None:
@@ -186,6 +248,10 @@ class HybridIntentClassifierTest(IsolatedAsyncioTestCase):
                 ("turn write", "movement", "right"),
                 ("Don't detered the suspect", "other", ""),
                 ("deter or expel the suspect", "other", ""),
+                ("Please help me detered that suspect now", "defense", "deter"),
+                ("We need patrol area B now", "patrol", "B"),
+                ("Please enable the camera now", "video_task", ""),
+                ("left and right", "other", ""),
             ):
                 with self.subTest(command=command):
                     result = await service.classify(command)
@@ -208,7 +274,7 @@ class HybridIntentClassifierTest(IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"INTENT_BACKEND": "hybrid"}, clear=True):
             service = IntentService(IntentSettings.from_env())
         for text, intent, argument in (
-            ("Show me what the camera sees", "video_task", ""),
+            ("Show me what the lens sees", "video_task", ""),
             ("Have the dog check zone A", "patrol", "A"),
         ):
             with self.subTest(text=text):
@@ -252,6 +318,10 @@ class AsrIntentIntegrationTest(IsolatedAsyncioTestCase):
                     ("Expelled the suspect.", "expel"), ("turn write", "right"),
                     ("Don't detered the suspect", None),
                     ("deter or expel the suspect", None),
+                    ("Please help me detered that suspect now", "deter"),
+                    ("Please move forward just a little", "forward"),
+                    ("left and right", None),
+                    ("We need patrol area A now", None),
                 ):
                     with self.subTest(command=command):
                         remote = await _resolve_intent(command, replace(
@@ -262,6 +332,19 @@ class AsrIntentIntegrationTest(IsolatedAsyncioTestCase):
                         self.assertEqual(direction, remote.get("direction"))
         finally:
             await client.close()
+
+    async def test_discovery_keywords_keep_existing_task_mapping(self) -> None:
+        settings = replace(AsrSettings.from_env(), intent_profile="discovery", intent_url="")
+        for text, expected in (
+            ("We need patrol area B7 now", {"type": "TASK", "parameters": {"area": "B7"}}),
+            ("The next task is patrol", {"type": "TASK", "parameters": {}}),
+            ("Please open the camera", {"type": "VIDEO_TASK", "parameters": {}}),
+            ("We should recognize this", {"type": "OBJECT_RECOGNITION", "parameters": {}}),
+            ("Don't patrol", {"type": "UNKNOWN", "parameters": {}}),
+            ("Move forward just a little", {"type": "UNKNOWN", "parameters": {}}),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(expected, await _resolve_intent(text, settings))
 
     async def test_remote_failure_still_corrects_detered_locally(self) -> None:
         async def unavailable(_request):

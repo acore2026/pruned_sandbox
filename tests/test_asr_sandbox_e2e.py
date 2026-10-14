@@ -129,7 +129,11 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
                                 ("expelled the suspect.", "expel"),
                                 ("Move forwards.", "forward"), ("Turn write.", "right"),
                                 ("Go straight", "forward"), ("Get forward", "forward"),
-                                ("deters a suspect.", "deter"), ("deters the suspect", "deter")):
+                                ("deters a suspect.", "deter"), ("deters the suspect", "deter"),
+                                ("Please help me detered that suspect now", "deter"),
+                                ("Yesterday we deterred the suspect.", "deter"),
+                                ("这里需要向前走一点", "forward"),
+                                ("Go straight or get forward", "forward")):
             FakeWhisperModel.transcript_text = text
             upload = FormData()
             upload.add_field("request_id", "audio-action-1")
@@ -182,7 +186,8 @@ class AsrToSandboxE2ETest(IsolatedAsyncioTestCase):
             "agent_id": "glasses",
         }
         for text in ("今天天气不错", "Don't detered the suspect.",
-                     "detered or expel the suspect.", "Yesterday we deterred the suspect.",
+                     "detered or expel the suspect.", "left and right",
+                     "We need patrol area A now", "Please show the camera",
                      "defer the suspect", "write", "wave", "Please WAVE!",
                      "wave hello", "say hello", "hello", "挥手", "打招呼", "你好"):
             with self.subTest(text=text):

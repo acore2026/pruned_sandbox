@@ -4,6 +4,7 @@ import asyncio
 import fractions
 import logging
 import time
+from collections import deque
 from typing import Any
 
 import av
@@ -44,6 +45,9 @@ class FramePipeline:
         self.dropped_frames = 0
         self.last_frame_at_ms = 0
         self.last_error: str | None = None
+        self._latest_enqueued_at = None
+        self._timings = deque(maxlen=200)
+        self._last_metrics_at = 0.0
 
     async def attach_source(self, track: MediaStreamTrack, source_id: str) -> None:
         await self._cancel_source_task()
@@ -136,6 +140,7 @@ class FramePipeline:
             if queue.full():
                 queue.get_nowait()
                 self.dropped_frames += 1
+            self._latest_enqueued_at = time.perf_counter()
             queue.put_nowait(image)
 
     async def _process_frames(
@@ -145,6 +150,8 @@ class FramePipeline:
     ) -> None:
         while True:
             image = await queue.get()
+            started = time.perf_counter()
+            queue_ms = max(0.0, (started - self._latest_enqueued_at) * 1000) if self._latest_enqueued_at is not None else 0.0
             try:
                 annotated, detections = await asyncio.to_thread(
                     self.detector.process,
@@ -160,6 +167,13 @@ class FramePipeline:
                 return
             self._latest_image = self._fit_output(annotated)
             self.processed_frames += 1
+            self._timings.append((queue_ms, (time.perf_counter() - started) * 1000))
+            if time.perf_counter() - self._last_metrics_at >= 5:
+                self._last_metrics_at = time.perf_counter()
+                timing = np.asarray(self._timings)
+                LOGGER.info("pipeline_metrics source=%s received=%s processed=%s dropped=%s queue_p95_ms=%.2f processing_p95_ms=%.2f samples=%s",
+                            source_id, self.received_frames, self.processed_frames, self.dropped_frames,
+                            np.percentile(timing[:, 0], 95), np.percentile(timing[:, 1], 95), len(timing))
             self.last_frame_at_ms = int(time.time() * 1000)
             self._last_processed_at = time.monotonic()
             self.processed_frame.set()
@@ -303,6 +317,7 @@ class OutputVideoTrack(MediaStreamTrack):
         self._next_frame_at = 0.0
         self._last_processed = -1
         self._stalled_sent = False
+        self._last_output_at = None
 
     async def recv(self) -> av.VideoFrame:
         # Each receiver consumes a processed revision at most once. Slow
@@ -339,6 +354,9 @@ class OutputVideoTrack(MediaStreamTrack):
                     pass
         self._last_processed = self.pipeline.processed_frames
         now = time.perf_counter()
+        LOGGER.debug("video_output revision=%s interval_ms=%s", self._last_processed,
+                     None if self._last_output_at is None else (now - self._last_output_at) * 1000)
+        self._last_output_at = now
         self._next_frame_at = now + self._interval
         if self._clock_origin is None:
             self._clock_origin = now

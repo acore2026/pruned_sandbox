@@ -21,13 +21,15 @@ LOGGER = logging.getLogger(__name__)
 CONSENT_RESPONSE_TIMEOUT = 15.0
 CONSENT_INTERVAL = 5.0
 CONSENT_EXPIRY = 30.0
-VIDEO_BITRATE_BPS = 250_000
+VIDEO_BITRATE_BPS = int(os.getenv("VIDEO_BITRATE_BPS", "0"))
+if VIDEO_BITRATE_BPS != 0 and not 250_000 <= VIDEO_BITRATE_BPS <= 1_500_000:
+    raise ValueError("VIDEO_BITRATE_BPS must be 0 (native adaptation) or between 250000 and 1500000")
 # Packet pacing is separate from the encoded average bitrate. A higher pacing
 # rate completes each frame sooner without increasing the encoder's target.
 # Keep an environment override for deployments with constrained tunnel queues.
-VIDEO_WIRE_BITRATE_BPS = int(os.getenv("VIDEO_WIRE_BITRATE_BPS", "1000000"))
-if VIDEO_WIRE_BITRATE_BPS <= 0:
-    raise ValueError("VIDEO_WIRE_BITRATE_BPS must be positive")
+VIDEO_WIRE_BITRATE_BPS = int(os.getenv("VIDEO_WIRE_BITRATE_BPS", "0"))
+if VIDEO_WIRE_BITRATE_BPS < 0:
+    raise ValueError("VIDEO_WIRE_BITRATE_BPS must be non-negative")
 
 
 class _ConsentTransaction(stun.Transaction):
@@ -245,6 +247,13 @@ class _BoundedEncoder:
 def limit_sender_bitrate(sender: Any, maximum: int = VIDEO_BITRATE_BPS,
                          *, wire_bitrate: int = VIDEO_WIRE_BITRATE_BPS) -> None:
     """Enforce the encoder cap even when receiver REMB asks for more bandwidth."""
+    if wire_bitrate < 0:
+        raise ValueError("wire_bitrate must be non-negative")
+    if maximum == 0:
+        if wire_bitrate:
+            pace_video_transport(sender.transport, wire_bitrate)
+        LOGGER.info("rtc_native_encoder custom_encoder_cap=off custom_pacing_bps=%s", wire_bitrate)
+        return
     if maximum < 250_000:
         raise ValueError("aiortc video requires at least 250000 bits/s")
     if getattr(sender, "_video_bitrate_limit", None) == maximum:
@@ -264,7 +273,8 @@ def limit_sender_bitrate(sender: Any, maximum: int = VIDEO_BITRATE_BPS,
 
     sender._next_encoded_frame = MethodType(next_frame, sender)
     sender._video_bitrate_limit = maximum
-    pace_video_transport(sender.transport, wire_bitrate)
+    if wire_bitrate:
+        pace_video_transport(sender.transport, wire_bitrate)
     LOGGER.info("rtc_encoder_bitrate_limit bits_per_second=%s", maximum)
 
 

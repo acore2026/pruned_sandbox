@@ -292,12 +292,15 @@ curl --noproxy '*' -X POST http://127.0.0.1:9004/api/v1/transcribe \
 转写文本；任务发现未命中时为`intent.type=UNKNOWN`，运行期未命中时为
 `intent.matched=false`。
 
-意图识别优先使用规则，对命令副本做有限纠错，响应中的`text`保留实际转写。
+意图识别优先使用规则：扫描整句话，任一关键词命中即可触发，无需完整句型。
+英文按完整单词匹配，中文按包含关系匹配；响应中的`text`保留实际转写。
 例如`detered`、`deterred the suspect`返回`direction=deter`；`expelled the suspect`
 返回`expel`；`move forwards/backwards`和`turn write/lift`分别匹配对应移动方向。
 `go straight`、`get forward`返回`forward`；`deters the suspect`和`deters a suspect`返回`deter`。
-相似拼写仅在明确命令模板中进行唯一的一次编辑匹配（含相邻字母交换），不纠正目标物名称或区域参数。
-否定、转述、多个冲突动作及无法可靠匹配的运行期命令返回`matched=false`；
+明确别名支持句中任意位置；相似拼写仍仅在原有命令模板中进行唯一的一次编辑匹配，
+不对目标物名称或区域参数进行模糊纠错。明确否定和多个不同方向/防御动作返回`matched=false`；
+转述不再拦截，跨意图按既有优先级选择，例如`patrol area A and deter the suspect`返回巡逻。
+接口映射保持原样：巡逻仅在9004映射为TASK，运行期音频仅映射移动和威吓/驱逐。
 未命中的移动、威吓和驱逐文本不会接受Qwen猜测的动作结果。
 全部现行规则、命令别名和拒绝条件见[意图识别规则清单](意图识别规则清单.md)。
 
@@ -531,3 +534,9 @@ RTP 仍使用实际时间戳。`rtc_video_encoded` 日志记录编码大小及�
 连续 3 秒没有更新处理图像时，回传改为 `Video source stalled` 提示，
 `source_frame_available` 返回 false；恢复新帧后自动恢复图像，避免摄像头断开时
 继续把最后一帧作为实时画面发送。ICE 连接保持，摄像头 USB 重连本身仍需 producer 重新打开设备。
+
+## 视频码率对照与处理指标
+
+`sandbox.env` 新增 `VIDEO_BITRATE_BPS`（默认 0，不施加应用上限；显式正数范围 250000～1500000），`VIDEO_WIRE_BITRATE_BPS` 默认 0。编码质量与发包预算独立，修改后需重启对应服务生效。每 5 秒的 `pipeline_metrics` 记录帧计数、丢帧及最近 200 帧队列等待/处理 P95；DEBUG 的 `video_output` 记录结果版本与输出帧间隔。仍为容量 1 队列、只发新帧、上限 20 fps。
+
+当前正式默认：Python 上传 bitrate_kbps=0，不安装应用编码限幅、不写 SDP b=AS；两段 pacing 默认 0，不安装自定义发包限速。保留 WebRTC 拥塞控制和编码器固有边界。无需演示时调参；部署时若已有正数环境覆盖，须清理或设为 0。

@@ -10,6 +10,12 @@ from typing import Any
 
 from .config import IntentSettings
 from .command_normalization import command_is_blocked, normalize_command_text
+from .command_normalization import (
+    DEFENSE_KEYWORDS,
+    MOVEMENT_KEYWORDS,
+    keyword_arguments,
+    keyword_pattern,
+)
 
 
 DEFAULT_INTENTS = {
@@ -20,132 +26,18 @@ DEFAULT_INTENTS = {
     "movement",
     "other",
 }
-DEFENSE_KEYWORDS = (
-    "threaten",
-    "deter",
-    "expel",
-    "drive away",
-    # Legacy aliases are kept for existing callers; English is the canonical input language.
-    "威吓",
-    "驱逐",
-)
 VIDEO_TASK_KEYWORDS = (
-    "live video",
-    "real-time video",
-    "realtime video",
-    "view the scene",
-    "view the site",
-    "view live",
-    "实时画面",
-    "查看现场",
+    "video", "camera", "view scene", "view the scene", "view site", "view the site",
+    "view live", "view the live", "实时画面", "查看现场",
 )
 OBJECT_RECOGNITION_KEYWORDS = (
-    "suspicious object recognition",
-    "recognize suspicious objects",
-    "identify suspicious objects",
-    "detect suspicious objects",
-    "可疑物识别",
-    "识别可疑物",
+    "recognize", "recognition", "detect", "suspicious object", "suspicious objects", "可疑物",
 )
-MOVEMENT_COMMANDS = {
-    "happy": "happy",
-    "move forward": "forward",
-    "go forward": "forward",
-    "go straight": "forward",
-    "get forward": "forward",
-    "step forward": "forward",
-    "forward": "forward",
-    "move back": "backward",
-    "move backward": "backward",
-    "go back": "backward",
-    "go backward": "backward",
-    "step back": "backward",
-    "back": "backward",
-    "backward": "backward",
-    "move left": "left",
-    "go left": "left",
-    "turn left": "left",
-    "left": "left",
-    "move right": "right",
-    "go right": "right",
-    "turn right": "right",
-    "right": "right",
-    # Legacy aliases are kept for existing callers; English is the canonical input language.
-    "向前": "forward",
-    "向前走": "forward",
-    "前进": "forward",
-    "退后": "backward",
-    "向后": "backward",
-    "后退": "backward",
-    "向左": "left",
-    "左转": "left",
-    "向右": "right",
-    "右转": "right",
-}
-FIND_PREFIXES = (
-    "please look for",
-    "please identify",
-    "please locate",
-    "please search for",
-    "please find the",
-    "please find",
-    "look for",
-    "identify",
-    "locate",
-    "search for",
-    "find the",
-    "find",
-    "请帮我寻找",
-    "请帮我找",
-    "帮我寻找",
-    "帮我找",
-    "帮我识别",
-    "请识别",
-    "寻找",
-    "识别",
-    "找",
-)
-GRAB_PREFIXES = (
-    "please pick up",
-    "please grasp",
-    "please grab",
-    "pick up",
-    "grasp",
-    "grab",
-    "请帮我抓取",
-    "帮我抓取",
-    "请抓取",
-    "抓取",
-    "请帮我夹取",
-    "帮我夹取",
-    "夹取",
-    "请帮我拿起",
-    "帮我拿起",
-    "请帮我拿",
-    "帮我拿",
-    "拿起",
-    "请抓",
-    "帮我抓",
-    "抓",
-)
-PATROL_KEYWORDS = (
-    "patrol",
-    "inspect",
-    "inspection",
-)
+FIND_KEYWORDS = ("look for", "identify", "locate", "search for", "find", "寻找", "识别", "找")
+GRAB_KEYWORDS = ("pick up", "grasp", "grab", "抓取", "夹取", "拿起", "拿", "抓")
+PATROL_KEYWORDS = ("patrol", "inspect", "inspection", "巡逻", "巡检")
 PATROL_AREA_PATTERN = re.compile(r"\b(?:area|zone)\s+([a-z0-9]+)\b", re.IGNORECASE)
 LEGACY_PATROL_AREA_PATTERN = re.compile(r"([A-Za-z0-9一二三四五六七八九十]+区域)")
-WORD_BOUNDARY_DEFENSE_PATTERN = re.compile(
-    r"\b(?:threaten|deter|expel)\b|\bdrive\s+away\b", re.IGNORECASE
-)
-WORD_BOUNDARY_KEYWORD_PATTERN = re.compile(
-    r"\b(?:live\s+video|real[- ]?time\s+video|view\s+(?:the\s+)?(?:scene|site|live))\b",
-    re.IGNORECASE,
-)
-OBJECT_RECOGNITION_PATTERN = re.compile(
-    r"\b(?:suspicious\s+object\s+recognition|(?:recognize|identify|detect)\s+suspicious\s+objects?)\b",
-    re.IGNORECASE,
-)
 ZH_TO_EN = {
     "黄色": "yellow",
     "黄": "yellow",
@@ -206,9 +98,9 @@ class RuleIntentClassifier:
         if not normalized or command_is_blocked(normalized):
             return IntentResult("other", "", 1.0, self.name)
         normalized = normalize_command_text(normalized)
-        movement = self._movement(normalized)
-        if movement:
-            return IntentResult("movement", movement, 1.0, self.name)
+        movements = keyword_arguments(normalized, MOVEMENT_KEYWORDS)
+        if len(movements) == 1:
+            return IntentResult("movement", movements.pop(), 1.0, self.name)
         patrol = self._patrol(normalized)
         if patrol is not None:
             return IntentResult("patrol", patrol, 1.0, self.name)
@@ -216,78 +108,45 @@ class RuleIntentClassifier:
             return IntentResult("video_task", "", 1.0, self.name)
         if self._object_recognition(normalized):
             return IntentResult("object_recognition", "", 1.0, self.name)
-        defense = self._defense(normalized)
-        if defense:
-            return IntentResult("defense", defense, 1.0, self.name)
-        grab = self._argument_after_prefix(normalized, GRAB_PREFIXES)
+        defenses = keyword_arguments(normalized, DEFENSE_KEYWORDS)
+        if len(defenses) == 1:
+            return IntentResult("defense", defenses.pop(), 1.0, self.name)
+        grab = self._argument_after_keyword(normalized, GRAB_KEYWORDS)
         if grab is not None:
             argument, i18n = self._normalize_object(grab)
             return IntentResult("grab", argument, 0.98, self.name, i18n)
-        found = self._argument_after_prefix(normalized, FIND_PREFIXES)
-        if found is not None and found:
+        found = self._argument_after_keyword(normalized, FIND_KEYWORDS)
+        if found is not None:
             argument, i18n = self._normalize_object(found)
             return IntentResult("find_object", argument, 0.98, self.name, i18n)
         return IntentResult("other", "", 0.8, self.name)
 
     @staticmethod
-    def _movement(text: str) -> str:
-        cleaned = re.sub(r"[^a-z0-9\u4e00-\u9fff ]+", " ", text.lower())
-        cleaned = " ".join(cleaned.split())
-        if cleaned.startswith("please "):
-            cleaned = cleaned[7:]
-        return MOVEMENT_COMMANDS.get(cleaned, "")
-
-    @staticmethod
     def _patrol(text: str) -> str | None:
         lowered = text.lower()
-        if re.match(
-            r"^(?:请)?(?:帮我)?(?:(?:机器狗)?(?:巡逻|巡检)"
-            r"|(?:派|让|叫)机器狗.*?(?:巡逻|巡检))", text
-        ):
+        patrol_match = keyword_pattern(PATROL_KEYWORDS).search(text)
+        if patrol_match:
             match = LEGACY_PATROL_AREA_PATTERN.search(text)
-            return match.group(1) if match else ""
-        if not re.match(r"^(?:patrol|inspect|inspection)\b", lowered):
-            return None
-        match = PATROL_AREA_PATTERN.search(lowered)
-        return match.group(1).upper() if match else ""
-
-    @staticmethod
-    def _defense(text: str) -> str:
-        target = r"(?:\s+(?:the\s+|a\s+)?(?:suspects?|intruders?|criminals?|person|bad guy))?"
-        match = re.fullmatch(r"(expel|drive away|threaten|deter|intimidate)" + target,
-                             text, re.IGNORECASE)
-        if match:
-            return "expel" if match[1].lower() in {"expel", "drive away"} else "deter"
-        match = re.fullmatch(r"(?:请|请帮我|帮我)?(驱逐|威吓|威慑)(?:歹徒|嫌疑人|坏人)?", text)
-        if match:
-            return "expel" if match[1] == "驱逐" else "deter"
-        return ""
+            if match:
+                return match.group(1)
+            match = PATROL_AREA_PATTERN.search(lowered)
+            return match.group(1).upper() if match else ""
+        return None
 
     @staticmethod
     def _video_task(text: str) -> bool:
-        return WORD_BOUNDARY_KEYWORD_PATTERN.search(text) is not None or any(
-            keyword in text for keyword in ("实时画面", "查看现场")
-        )
+        return keyword_pattern(VIDEO_TASK_KEYWORDS).search(text) is not None
 
     @staticmethod
     def _object_recognition(text: str) -> bool:
-        return OBJECT_RECOGNITION_PATTERN.search(text) is not None or (
-            "可疑物" in text and "识别" in text
-        )
+        return keyword_pattern(OBJECT_RECOGNITION_KEYWORDS).search(text) is not None
 
     @staticmethod
-    def _argument_after_prefix(text: str, prefixes: tuple[str, ...]) -> str | None:
-        lowered = text.lower()
-        for prefix in prefixes:
-            lowered_prefix = prefix.lower()
-            if lowered == lowered_prefix:
-                return ""
-            if not lowered.startswith(lowered_prefix):
-                continue
-            remainder = text[len(prefix) :]
-            if any("\u4e00" <= char <= "\u9fff" for char in prefix) or remainder.startswith(" "):
-                return remainder.strip(" ，。！？,.!?")
-        return None
+    def _argument_after_keyword(text: str, keywords: tuple[str, ...]) -> str | None:
+        match = keyword_pattern(keywords).search(text)
+        if match is None:
+            return None
+        return text[match.end():].strip(" ，。！？,.!?;：:")
 
     @staticmethod
     def _normalize_object(text: str) -> tuple[str, dict[str, str] | None]:

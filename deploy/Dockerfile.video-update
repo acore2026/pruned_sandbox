@@ -1,0 +1,6 @@
+# Reuse the installed CUDA / ASR / intent / model dependencies unchanged.
+ARG BASE_IMAGE=pruned-sandbox:1013-fps20-fresh
+FROM ${BASE_IMAGE}
+COPY --chown=sandbox:sandbox services/video/rtc_policy.py /app/services/video/rtc_policy.py
+COPY --chown=sandbox:sandbox services/video/pipeline.py /app/services/video/pipeline.py
+ENV VIDEO_BITRATE_BPS=0 VIDEO_WIRE_BITRATE_BPS=0
